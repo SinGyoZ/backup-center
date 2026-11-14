@@ -1,0 +1,679 @@
+<script setup>
+import { ref, reactive, computed, onMounted } from 'vue'
+import { useRouter } from 'vue-router'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { Refresh, Search, Delete } from '@element-plus/icons-vue'
+import { backupLogsApi } from '@/api/backupLogs'
+import { tasksApi } from '@/api/tasks'
+import { serversApi } from '@/api/servers'
+import { useAutoRefresh } from '@/composables/useAutoRefresh'
+
+const router = useRouter()
+// 恢复功能已独立为「数据恢复」栏目
+const gotoRestore = () => router.push('/restore')
+
+const list = ref([])
+const meta = reactive({ current_page: 1, total: 0, per_page: 20 })
+
+const filters = reactive({
+  keyword: '',
+  status: '',
+  task_id: '',
+  server_id: '',
+})
+
+const taskOptions = ref([])
+const serverOptions = ref([])
+
+const statusOptions = [
+  { value: '',        label: '全部状态' },
+  { value: 'success', label: '成功' },
+  { value: 'failed',  label: '失败' },
+  { value: 'running', label: '执行中' },
+]
+
+const statusMeta = {
+  success: { text: '成功',   cls: 'ok' },
+  failed:  { text: '失败',   cls: 'fail' },
+  running: { text: '执行中', cls: 'run' },
+}
+const uploadMeta = {
+  pending:       { text: '待上传',   cls: 'gray' },
+  uploading:     { text: '上传中',   cls: 'run' },
+  uploaded:      { text: '已上传',   cls: 'ok' },
+  upload_failed: { text: '上传失败', cls: 'fail' },
+}
+// 每条 upload 记录的状态映射（不同于 backup_logs.upload_status 的聚合值）
+const uploadCellMeta = {
+  pending:   { text: '待上传',  cls: 'gray' },
+  uploading: { text: '上传中',  cls: 'run' },
+  uploaded:  { text: '已上传',  cls: 'ok' },
+  failed:    { text: '失败',    cls: 'fail' },
+}
+
+const pathBasename = (p) => {
+  if (!p) return ''
+  const parts = String(p).split('/').filter(Boolean)
+  return parts.length ? parts[parts.length - 1] : p
+}
+const dirname = (p) => {
+  if (!p) return ''
+  const s = String(p)
+  const idx = s.lastIndexOf('/')
+  return idx > 0 ? s.slice(0, idx) : ''
+}
+
+const doFetch = async () => {
+  const res = await backupLogsApi.list({
+    keyword: filters.keyword || undefined,
+    status: filters.status || undefined,
+    task_id: filters.task_id || undefined,
+    server_id: filters.server_id || undefined,
+    page: meta.current_page,
+  })
+  list.value = res.data
+  if (res.meta) {
+    meta.current_page = res.meta.current_page
+    meta.total = res.meta.total
+    meta.per_page = res.meta.per_page
+  }
+}
+
+// 30 秒后台静默刷新
+const { loading, manualRefresh } = useAutoRefresh(doFetch, 30000)
+const fetch = manualRefresh
+
+const loadFilterOptions = async () => {
+  const [t, s] = await Promise.all([
+    tasksApi.list({ per_page: 100 }),
+    serversApi.list({ per_page: 100 }),
+  ])
+  taskOptions.value = t.data || []
+  serverOptions.value = s.data || []
+}
+onMounted(loadFilterOptions)
+
+const remove = (row) => {
+  ElMessageBox.confirm(
+    `确认删除备份记录"${row.filename}"？（不会影响原备份文件，只删本平台记录）`,
+    '删除备份记录',
+    { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' },
+  )
+    .then(async () => {
+      await backupLogsApi.destroy(row.id)
+      ElMessage.success('已删除')
+      fetch()
+    })
+    .catch(() => {})
+}
+
+const fmtTime = (iso) => {
+  if (!iso) return '—'
+  const d = new Date(iso)
+  const diff = (Date.now() - d.getTime()) / 1000
+  if (diff < 60) return `${Math.floor(diff)} 秒前`
+  if (diff < 3600) return `${Math.floor(diff / 60)} 分钟前`
+  if (diff < 86400) return `${Math.floor(diff / 3600)} 小时前`
+  return d.toLocaleDateString()
+}
+const fmtFull = (iso) => (iso ? new Date(iso).toLocaleString() : '—')
+const fmtSize = (bytes) => {
+  if (!bytes) return '—'
+  const units = ['B', 'KB', 'MB', 'GB', 'TB']
+  let v = bytes, i = 0
+  while (v >= 1024 && i < units.length - 1) {
+    v /= 1024
+    i++
+  }
+  return v.toFixed(v >= 100 || i === 0 ? 0 : 1) + ' ' + units[i]
+}
+const fmtDuration = (sec) => {
+  if (!sec) return '—'
+  if (sec < 60) return `${sec}s`
+  const m = Math.floor(sec / 60)
+  const s = sec % 60
+  return s ? `${m}m ${s}s` : `${m}m`
+}
+
+// 文件类型（与后端 RestoreController::fileType 同规则）：
+// -snap-<stamp> → 快照；.sql / .sql.gz / .sql.zip → 数据库转储（历史记录兼容）；
+// .tar.gz / .zip → 目录归档；其他 → 备份文件。
+// 宝塔 external 文件名无 -web-/-db- 标记（hi.imask.cc_20261018_044137.tar.gz），
+// 旧规则把它们全判成 file，chip 展示与套件配对都失真，故按扩展名判定。
+const fileTypeOf = (filename) => {
+  const n = String(filename || '')
+  if (/-snap-\d{8}-\d{6}$/.test(n)) return 'snapshot'
+  if (/\.sql(\.|$)/i.test(n)) return 'database'
+  if (/\.(tar\.gz|zip)$/i.test(n)) return 'archive'
+  return 'file'
+}
+const fileTypeMeta = {
+  archive:   { text: '目录归档', cls: 'chip-blue' },
+  database:  { text: '数据库转储', cls: 'chip-purple' },
+  snapshot:  { text: '快照',     cls: 'chip-snap' },
+  file:      { text: '备份文件', cls: 'chip-neutral' },
+}
+
+/* ---------- 备份套件分组：任务编码优先，无编码走类型配对 + 5 分钟窗口 ----------
+   与后端 RestoreController::buildSuites 同源同参：
+   ① 有 batch_code（pack_now 指令 ID）→ 按编码精确分组，不看时间。
+      一次指令 = Agent 完整跑一次 = 一场备份；两次手动备份间隔再近也各算各的。
+   ② 无编码（宝塔 external 扫描发现）→ 每个目录归档配窗口内最近的未配对
+      数据库转储（历史记录兼容，宝塔两产物间隔 8–45s）；
+   ③ 仍未配对 → 5 分钟窗口归并（与组内最早比较，防链式）；
+   ④ 组内/套件按 backup_at 倒序。
+   分页场景下同组文件跨页会拆成两个套件（可接受，不为此改后端 API）。 */
+const SUITE_WINDOW_MS = 5 * 60 * 1000
+const backupTs = (row) => (row && row.backup_at ? new Date(row.backup_at).getTime() : 0)
+const groupedSuites = computed(() => {
+  // ① 任务编码分组（键带 taskId 防御；pack_now 指令天然按任务隔离）
+  const coded = new Map()
+  const uncodedByTask = new Map()
+  for (const row of list.value) {
+    const code = row.batch_code || ''
+    if (code) {
+      const key = `${row.task_id}:${code}`
+      if (!coded.has(key)) coded.set(key, [])
+      coded.get(key).push(row)
+    } else {
+      if (!uncodedByTask.has(row.task_id)) uncodedByTask.set(row.task_id, [])
+      uncodedByTask.get(row.task_id).push(row)
+    }
+  }
+  const suites = []
+  for (const rows of coded.values()) {
+    const sorted = [...rows].sort((a, b) => backupTs(b) - backupTs(a))
+    suites.push({ key: `suite-${sorted[0].id}`, taskId: sorted[0].task_id, files: sorted })
+  }
+  // ② 无编码：按任务归拢 + 类型配对 + 窗口兑底
+  for (const [taskId, rows] of uncodedByTask) {
+    const sorted = [...rows].sort((a, b) => backupTs(b) - backupTs(a))
+    const archives = sorted.filter((r) => fileTypeOf(r.filename) === 'archive')
+    const dbs = sorted.filter((r) => fileTypeOf(r.filename) === 'database')
+    const usedDb = new Set()
+    for (const w of archives) {
+      let best = -1
+      let bestDiff = Infinity
+      dbs.forEach((d, i) => {
+        if (usedDb.has(i)) return
+        const diff = Math.abs(backupTs(w) - backupTs(d))
+        if (diff <= SUITE_WINDOW_MS && diff < bestDiff) { best = i; bestDiff = diff }
+      })
+      if (best >= 0) {
+        usedDb.add(best)
+        suites.push({ key: `suite-${w.id}`, taskId, files: [w, dbs[best]] })
+      } else {
+        suites.push({ key: `suite-${w.id}`, taskId, files: [w] })
+      }
+    }
+    const leftovers = [
+      ...dbs.filter((_, i) => !usedDb.has(i)),
+      ...sorted.filter((r) => !['archive', 'database'].includes(fileTypeOf(r.filename))),
+    ]
+    const groups = []
+    for (const f of leftovers) {
+      const last = groups[groups.length - 1]
+      if (last && Math.abs(Math.min(...last.map(backupTs)) - backupTs(f)) <= SUITE_WINDOW_MS) {
+        last.push(f)
+      } else {
+        groups.push([f])
+      }
+    }
+    for (const g of groups) suites.push({ key: `suite-${g[0].id}`, taskId, files: g })
+  }
+  return suites.sort((a, b) => backupTs(b.files[0]) - backupTs(a.files[0]))
+})
+
+// 聚合展示：状态/上传状态「最坏优先」；时间/任务取组内最新（组内已倒序，第一个最新）
+const suiteRows = computed(() =>
+  groupedSuites.value.map((s) => {
+    const files = s.files
+    const status = files.some((f) => f.status === 'failed')
+      ? 'failed'
+      : files.some((f) => f.status === 'running')
+        ? 'running'
+        : 'success'
+    const uploadStatus = files.some((f) => f.upload_status === 'upload_failed')
+      ? 'upload_failed'
+      : files.every((f) => f.upload_status === 'uploaded')
+        ? 'uploaded'
+        : files.some((f) => f.upload_status === 'uploading')
+          ? 'uploading'
+          : 'pending'
+    const first = files[0]
+    return {
+      ...s,
+      fileCount: files.length,
+      totalSize: files.reduce((sum, f) => sum + (f.size || 0), 0),
+      totalDuration: files.reduce((sum, f) => sum + (f.duration_seconds || 0), 0),
+      latestAt: first?.backup_at,
+      task: first?.task,
+      server: first?.server,
+      // 文件列副行：父目录（组内首个文件的 full_path 目录名）
+      parentDir: first?.full_path ? pathBasename(dirname(first.full_path)) : '',
+      status,
+      uploadStatus,
+    }
+  }),
+)
+
+/* ---------- 详情弹窗 ---------- */
+const detailOpen = ref(false)
+const detailSuite = ref(null)
+const openDetail = (suite) => {
+  detailSuite.value = suite
+  detailOpen.value = true
+}
+
+const total = computed(() => meta.total)
+</script>
+
+<template>
+  <div>
+    <div class="toolbar">
+      <div>
+        <h2 class="page-h">备份记录</h2>
+        <p class="page-sub">共 {{ total }} 个备份文件 · 同一次备份的多个文件整合为一条 · 后台每 30 秒静默刷新</p>
+      </div>
+      <div class="actions">
+        <el-button :icon="Refresh" @click="fetch" :loading="loading">刷新</el-button>
+      </div>
+    </div>
+
+    <div class="filter-bar bc-card">
+      <el-input
+        v-model="filters.keyword"
+        placeholder="搜索文件名 / 路径"
+        clearable
+        :prefix-icon="Search"
+        style="width: 240px"
+        @keyup.enter="fetch"
+        @clear="fetch"
+      />
+      <el-select
+        v-model="filters.task_id"
+        placeholder="所有任务"
+        clearable
+        filterable
+        style="width: 180px"
+        @change="fetch"
+        @clear="fetch"
+      >
+        <el-option v-for="t in taskOptions" :key="t.id" :value="t.id" :label="t.name" />
+      </el-select>
+      <el-select
+        v-model="filters.server_id"
+        placeholder="所有服务器"
+        clearable
+        filterable
+        style="width: 180px"
+        @change="fetch"
+        @clear="fetch"
+      >
+        <el-option v-for="s in serverOptions" :key="s.id" :value="s.id" :label="s.name" />
+      </el-select>
+      <el-select v-model="filters.status" style="width: 140px" @change="fetch">
+        <el-option v-for="o in statusOptions" :key="o.value" :value="o.value" :label="o.label" />
+      </el-select>
+      <el-button @click="fetch">应用</el-button>
+    </div>
+
+    <div class="table-card bc-card">
+      <el-table
+        :data="suiteRows"
+        v-loading="loading"
+        class="backup-logs-table"
+        style="width: 100%"
+        row-key="key"
+        empty-text="暂无备份记录 · Agent 发现新备份文件后会自动上报"
+      >
+        <el-table-column label="文件" min-width="170">
+          <template #default="{ row }">
+            <div class="cell-file">
+              <div class="strong" :title="row.files.map((f) => f.filename).join('\n')">
+                {{ row.fileCount }} 个文件
+              </div>
+              <div class="muted" v-if="row.parentDir" :title="row.files[0]?.full_path">{{ row.parentDir }}</div>
+            </div>
+          </template>
+        </el-table-column>
+
+        <el-table-column label="任务" width="160">
+          <template #default="{ row }">
+            <div v-if="row.task">
+              <div class="strong">{{ row.task.name }}</div>
+            </div>
+          </template>
+        </el-table-column>
+
+        <el-table-column label="服务器" width="140">
+          <template #default="{ row }">
+            <span v-if="row.server">{{ row.server.name }}</span>
+          </template>
+        </el-table-column>
+
+        <el-table-column label="大小" width="100">
+          <template #default="{ row }">
+            <span class="strong">{{ fmtSize(row.totalSize) }}</span>
+          </template>
+        </el-table-column>
+
+        <el-table-column label="用时" width="90">
+          <template #default="{ row }">
+            <span class="muted">{{ fmtDuration(row.totalDuration) }}</span>
+          </template>
+        </el-table-column>
+
+        <el-table-column label="备份时间" width="130">
+          <template #default="{ row }">
+            <span class="muted" :title="fmtFull(row.latestAt)">{{ fmtTime(row.latestAt) }}</span>
+          </template>
+        </el-table-column>
+
+        <el-table-column label="状态" width="90">
+          <template #default="{ row }">
+            <span :class="['badge', statusMeta[row.status]?.cls]">
+              {{ statusMeta[row.status]?.text }}
+            </span>
+          </template>
+        </el-table-column>
+
+        <el-table-column label="云上传" width="130">
+          <template #default="{ row }">
+            <span :class="['badge', uploadMeta[row.uploadStatus]?.cls]">
+              {{ uploadMeta[row.uploadStatus]?.text || '—' }}
+            </span>
+          </template>
+        </el-table-column>
+
+        <el-table-column label="操作" width="80" fixed="right">
+          <template #default="{ row }">
+            <el-button link type="primary" @click="openDetail(row)">详情</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+
+      <div v-if="meta.total > meta.per_page" class="pagination">
+        <el-pagination
+          layout="prev, pager, next, total"
+          :total="meta.total"
+          :page-size="meta.per_page"
+          :current-page="meta.current_page"
+          @current-change="(p) => { meta.current_page = p; fetch(); }"
+        />
+      </div>
+    </div>
+
+    <!-- 备份套件详情：组内多个文件 + 各自上传结果 -->
+    <el-dialog v-model="detailOpen" title="备份详情" width="680px" append-to-body>
+      <div v-if="detailSuite" class="suite-detail">
+        <div class="detail-summary">
+          <span class="summary-time">{{ fmtFull(detailSuite.latestAt) }}</span>
+          <span class="summary-meta">{{ detailSuite.fileCount }} 个文件 · 共 {{ fmtSize(detailSuite.totalSize) }}</span>
+        </div>
+        <div v-if="detailSuite.task" class="detail-site">
+          <span class="strong">{{ detailSuite.task.name }}</span>
+          <span v-if="detailSuite.server" class="muted"> · {{ detailSuite.server.name }}</span>
+        </div>
+
+        <el-table :data="detailSuite.files" size="small" style="width: 100%" class="detail-files-table">
+          <el-table-column type="expand">
+            <template #default="{ row }">
+              <div class="expand-panel">
+                <div class="expand-title">上传到远端存储的结果</div>
+                <div v-if="!row.uploads || row.uploads.length === 0" class="expand-empty">
+                  该备份没有触发任何存储上传（未配置目标存储 / 上传队列尚未启动）
+                </div>
+                <el-table v-else :data="row.uploads" size="small" style="width: 100%">
+                  <el-table-column label="存储" width="160">
+                    <template #default="{ row: u }">
+                      <div class="strong">{{ u.storage_name }}</div>
+                      <div class="muted">{{ u.storage_type || '' }}</div>
+                    </template>
+                  </el-table-column>
+                  <el-table-column label="状态" width="90">
+                    <template #default="{ row: u }">
+                      <span :class="['badge', uploadCellMeta[u.status]?.cls || 'gray']">
+                        {{ uploadCellMeta[u.status]?.text || u.status }}
+                      </span>
+                    </template>
+                  </el-table-column>
+                  <el-table-column label="大小" width="80">
+                    <template #default="{ row: u }">
+                      <span class="muted">{{ fmtSize(u.uploaded_bytes) }}</span>
+                    </template>
+                  </el-table-column>
+                  <el-table-column label="用时" width="70">
+                    <template #default="{ row: u }">
+                      <span class="muted">{{ fmtDuration(u.duration_seconds) }}</span>
+                    </template>
+                  </el-table-column>
+                  <el-table-column label="尝试" width="60">
+                    <template #default="{ row: u }">
+                      <span class="muted">{{ u.attempts || 0 }} 次</span>
+                    </template>
+                  </el-table-column>
+                  <el-table-column label="完成时间" width="120">
+                    <template #default="{ row: u }">
+                      <span class="muted">{{ fmtTime(u.finished_at) }}</span>
+                    </template>
+                  </el-table-column>
+                  <el-table-column label="错误 / 远端路径" min-width="200">
+                    <template #default="{ row: u }">
+                      <!-- 防御：重试成功后 error_message 可能残留；uploaded 成功态不再当硬错误展示 -->
+                      <div v-if="u.error_message && u.status !== 'uploaded'" class="err-msg" :title="u.error_message">
+                        ❌ {{ u.error_message }}
+                      </div>
+                      <div v-else-if="u.remote_path" class="mono muted" :title="u.remote_path">
+                        {{ u.remote_path }}
+                      </div>
+                      <div v-else-if="u.error_message" class="muted" :title="u.error_message">
+                        曾有失败尝试，已重传成功
+                      </div>
+                      <span v-else class="muted">—</span>
+                    </template>
+                  </el-table-column>
+                </el-table>
+                <div v-if="row.error_message" class="log-err">
+                  <b>备份错误：</b>{{ row.error_message }}
+                </div>
+              </div>
+            </template>
+          </el-table-column>
+
+          <el-table-column label="文件" min-width="200">
+            <template #default="{ row }">
+              <div class="cell-file">
+                <div class="mono strong" :title="row.full_path">{{ row.filename }}</div>
+                <div class="muted" v-if="row.full_path && row.full_path !== row.filename" :title="row.full_path">
+                  {{ pathBasename(dirname(row.full_path)) || '—' }}
+                </div>
+              </div>
+            </template>
+          </el-table-column>
+
+          <el-table-column label="类型" width="90">
+            <template #default="{ row }">
+              <span class="chip" :class="fileTypeMeta[fileTypeOf(row.filename)].cls">
+                {{ fileTypeMeta[fileTypeOf(row.filename)].text }}
+              </span>
+            </template>
+          </el-table-column>
+
+          <el-table-column label="大小" width="90">
+            <template #default="{ row }">
+              <span class="strong">{{ fmtSize(row.size) }}</span>
+            </template>
+          </el-table-column>
+
+          <el-table-column label="备份时间" width="120">
+            <template #default="{ row }">
+              <span class="muted" :title="fmtFull(row.backup_at)">{{ fmtTime(row.backup_at) }}</span>
+            </template>
+          </el-table-column>
+
+          <el-table-column label="状态" width="80">
+            <template #default="{ row }">
+              <span :class="['badge', statusMeta[row.status]?.cls]">
+                {{ statusMeta[row.status]?.text }}
+              </span>
+            </template>
+          </el-table-column>
+
+          <el-table-column label="云上传" width="110">
+            <template #default="{ row }">
+              <span :class="['badge', uploadMeta[row.upload_status]?.cls]">
+                {{ uploadMeta[row.upload_status]?.text || '—' }}
+              </span>
+            </template>
+          </el-table-column>
+
+          <el-table-column label="操作" width="70" fixed="right">
+            <template #default="{ row }">
+              <el-button link :icon="Delete" type="danger" @click="remove(row)">删除</el-button>
+            </template>
+          </el-table-column>
+        </el-table>
+      </div>
+
+      <template #footer>
+        <div class="detail-foot">
+          <span class="muted">删除单个文件不影响其他文件与云端归档</span>
+          <el-button link type="primary" @click="gotoRestore">去数据恢复 →</el-button>
+        </div>
+      </template>
+    </el-dialog>
+  </div>
+</template>
+
+<style scoped>
+/* 主表列序：1 文件 2 任务 3 服务器 4 大小 5 用时 6 备份时间 7 状态 8 云上传 9 操作(始终保留) */
+.toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 20px;
+}
+.page-h { margin: 0; font-size: 20px; font-weight: 600; color: var(--bc-text-primary); }
+.page-sub { margin: 4px 0 0; font-size: 12px; color: var(--bc-text-secondary); }
+.actions { display: inline-flex; gap: 8px; }
+
+.filter-bar {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  margin-bottom: 16px;
+  padding: 14px 16px;
+  flex-wrap: wrap;
+}
+
+.table-card { padding: 6px 6px 12px; }
+.pagination {
+  padding: 16px 12px 8px;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.cell-file .strong { color: var(--bc-text-primary); font-weight: 500; }
+.cell-file .muted { color: var(--bc-text-secondary); font-size: 11px; margin-top: 2px; }
+
+.strong { color: var(--bc-text-primary); font-weight: 500; }
+.muted  { color: var(--bc-text-secondary); font-size: 12px; }
+
+.mono {
+  font-family: 'JetBrains Mono', ui-monospace, Consolas, monospace;
+  font-size: 12px;
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 12px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.6;
+  letter-spacing: 0.2px;
+  white-space: nowrap;
+}
+.badge.ok   { background: var(--bc-success-bg); color: var(--bc-success); border: 1px solid var(--bc-success-border); }
+.badge.gray { background: var(--bc-bg-hover); color: var(--bc-text-secondary); border: 1px solid var(--bc-border-light); }
+.badge.warn { background: var(--bc-warning-bg); color: var(--bc-warning); border: 1px solid var(--bc-warning-border); }
+.badge.fail { background: var(--bc-danger-bg); color: var(--bc-danger); border: 1px solid var(--bc-danger-border); }
+.badge.run  { background: var(--bc-primary-light); color: var(--bc-primary); border: 1px solid var(--bc-primary-100); }
+
+/* 类型 chip（与恢复页语义一致：蓝=目录归档 / 紫=数据库转储 / 绿=快照 / 中性=其他备份文件） */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  font-size: 11px;
+  padding: 1px 12px;
+  border-radius: 999px;
+  font-weight: 500;
+  line-height: 1.6;
+  letter-spacing: 0.2px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.chip-blue    { background: var(--bc-primary-light); color: var(--bc-primary); border: 1px solid var(--bc-primary-100); }
+.chip-purple  { background: var(--bc-info-bg); color: var(--bc-info); border: 1px solid var(--bc-info-border); }
+.chip-snap    { background: var(--bc-success-bg); color: var(--bc-success); border: 1px solid var(--bc-success-border); }
+.chip-neutral { background: var(--bc-bg-inset); color: var(--bc-text-secondary); border: 1px solid var(--bc-border-light); }
+
+/* ---------- 详情弹窗 ---------- */
+.suite-detail { min-width: 0; }
+.detail-summary {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.summary-time { font-size: var(--bc-fs-md); font-weight: 600; color: var(--bc-text-primary); }
+.summary-meta {
+  font-size: var(--bc-fs-xs);
+  color: var(--bc-text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+.detail-site { margin-top: 4px; font-size: 12px; }
+.detail-files-table { margin-top: 12px; }
+
+.detail-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.expand-panel {
+  padding: 12px 20px 8px 60px;
+  background: var(--bc-bg-page);
+}
+.expand-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--bc-text-primary);
+  margin-bottom: 8px;
+}
+.expand-empty {
+  padding: 12px;
+  color: var(--bc-text-secondary);
+  font-size: 12px;
+}
+.err-msg {
+  font-size: 12px;
+  color: var(--bc-danger);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+.log-err {
+  margin-top: 10px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: var(--bc-danger-bg);
+  border: 1px solid var(--bc-danger-border);
+  color: var(--bc-danger);
+  font-size: 12px;
+}
+</style>

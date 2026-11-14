@@ -1,0 +1,301 @@
+<?php
+
+namespace App\Http\Controllers\Api;
+
+use App\Http\Controllers\Controller;
+use App\Http\Resources\BackupLogResource;
+use App\Http\Resources\RestoreCommandResource;
+use App\Models\AgentCommand;
+use App\Models\BackupLog;
+use App\Models\BackupTask;
+use App\Models\Server;
+use App\Models\Storage;
+use Carbon\Carbon;
+use Illuminate\Http\JsonResponse;
+use Illuminate\Http\Request;
+
+class DashboardController extends Controller
+{
+    /**
+     * 一次性返回 Dashboard 所有数据：KPI + 图表 + 最近记录 + 存储列表
+     */
+    public function index(Request $request): JsonResponse
+    {
+        $range = $request->string('range', 'month')->toString();
+        $ranges = ['day', 'week', 'month', 'quarter', 'halfyear', 'year'];
+        if (! in_array($range, $ranges, true)) {
+            $range = 'month';
+        }
+
+        $cfg = $this->rangeConfig($range);
+        $now = Carbon::now();
+        $start = $now->copy()->subDays($cfg['days']);
+        $prevStart = $start->copy()->subDays($cfg['days']);
+
+        // ---------- 服务器 & 任务 计数 ----------
+        $serverCount = Server::count();
+        $onlineCount = Server::all()
+            ->filter(fn ($s) => $s->computedStatus() === Server::STATUS_ONLINE)
+            ->count();
+        $taskCount = BackupTask::count();
+        $enabledTaskCount = BackupTask::where('status', BackupTask::STATUS_ENABLED)->count();
+
+        // ---------- 当前周期 备份统计 ----------
+        $curLogs = BackupLog::whereBetween('backup_at', [$start, $now])
+            ->get(['id', 'status', 'size', 'backup_at']);
+        $curSuccess = $curLogs->where('status', BackupLog::STATUS_SUCCESS)->count();
+        $curFailed  = $curLogs->where('status', BackupLog::STATUS_FAILED)->count();
+        $curCount   = $curLogs->count();
+        $curSize    = (int) $curLogs->sum('size');
+
+        // ---------- 当前周期 恢复统计（一条 restore 命令 = 一次文件级恢复） ----------
+        $curCmds = AgentCommand::where('type', AgentCommand::TYPE_RESTORE)
+            ->whereBetween('created_at', [$start, $now])
+            ->get(['id', 'status', 'params']);
+        $restoreTotal   = $curCmds->count();
+        $restoreSuccess = $curCmds->where('status', AgentCommand::STATUS_SUCCESS)->count();
+        $restoreFailed  = $curCmds->where('status', AgentCommand::STATUS_FAILED)->count();
+
+        // 恢复数据量：命令自身没有 size 字段，按 params.backup_log_id 取对应备份文件大小；
+        // 同一文件重复恢复按次累计（每次恢复都会实际回传一遍数据）。
+        $cmdLogIds = $curCmds->map(fn ($c) => $c->params['backup_log_id'] ?? null)
+            ->filter()->unique()->values();
+        $cmdLogSizes = $cmdLogIds->isNotEmpty()
+            ? BackupLog::whereIn('id', $cmdLogIds)->pluck('size', 'id')
+            : collect();
+        $restoreSize = (int) $curCmds->sum(
+            fn ($c) => (int) ($cmdLogSizes[$c->params['backup_log_id'] ?? 0] ?? 0)
+        );
+
+        // ---------- 上一周期 用于计算变化率 ----------
+        $prevAgg = BackupLog::whereBetween('backup_at', [$prevStart, $start])
+            ->selectRaw("
+                COUNT(CASE WHEN status='success' THEN 1 END) as success_count,
+                COUNT(CASE WHEN status='failed' THEN 1 END) as failed_count,
+                COUNT(*) as total_count,
+                COALESCE(SUM(size), 0) as total_size
+            ")
+            ->first();
+        $prevSuccess = (int) ($prevAgg->success_count ?? 0);
+        $prevFailed  = (int) ($prevAgg->failed_count ?? 0);
+        $prevCount   = (int) ($prevAgg->total_count ?? 0);
+        $prevSize    = (int) ($prevAgg->total_size ?? 0);
+
+        // ---------- 累计（历史全部） ----------
+        $cumAgg = BackupLog::selectRaw("COUNT(*) as cnt, COALESCE(SUM(size),0) as sz")->first();
+        $cumCount = (int) ($cumAgg->cnt ?? 0);
+        $cumSize  = (int) ($cumAgg->sz ?? 0);
+
+        // ---------- 时间分桶：备份次数趋势 + 大小趋势 ----------
+        $buckets = $this->buildBuckets($range, $now);
+        $countTrend = [];
+        $sizeTrend  = [];
+        foreach ($buckets as $b) {
+            $inBucket = $curLogs->filter(fn ($l) => $l->backup_at->between($b['start'], $b['end']));
+            $countTrend[] = ['label' => $b['label'], 'value' => $inBucket->count()];
+            $sizeTrend[]  = ['label' => $b['label'], 'value' => (int) $inBucket->sum('size')];
+        }
+
+        // ---------- 最近备份记录（10 条） ----------
+        $recent = BackupLog::with(['task:id,name', 'server:id,name'])
+            ->orderByDesc('backup_at')
+            ->limit(10)
+            ->get();
+
+        // ---------- 最近恢复记录（10 条，含进行中的命令） ----------
+        $recentRestores = AgentCommand::where('type', AgentCommand::TYPE_RESTORE)
+            ->orderByDesc('id')
+            ->limit(10)
+            ->get();
+        $restoreLogIds = $recentRestores->map(fn ($c) => $c->params['backup_log_id'] ?? null)
+            ->filter()->unique()->values();
+        $restoreLogs = $restoreLogIds->isNotEmpty()
+            ? BackupLog::with(['task:id,name'])
+                ->whereIn('id', $restoreLogIds)->get()->keyBy('id')
+            : collect();
+        // 把 BackupLog 挂到 restoreLog 关系上（AgentCommand 本身没有该关联），
+        // backup_log 已被删除时保持未挂载，Resource 会省略 task/size 字段。
+        foreach ($recentRestores as $cmd) {
+            $log = $restoreLogs->get($cmd->params['backup_log_id'] ?? 0);
+            if ($log) {
+                $cmd->setRelation('restoreLog', $log);
+            }
+        }
+
+        // ---------- 存储列表（含配额和已用量） ----------
+        $storages = Storage::withCount('tasks')->get()->map(fn ($s) => [
+            'id' => $s->id,
+            'name' => $s->name,
+            'type' => $s->type,
+            'status' => $s->status,
+            'is_mandatory' => (bool) $s->is_mandatory,
+            'tasks_count' => $s->tasks_count,
+            'upload_count' => $s->uploadCount(),
+            'last_test_status' => $s->last_test_status,
+            'quota_bytes' => $s->quota_bytes,
+            'used_bytes' => (int) $s->usedBytes(),
+        ]);
+
+        return response()->json([
+            'range' => $range,
+            'range_label' => $cfg['label'],
+
+            'stats' => [
+                'server_count' => $serverCount,
+                'server_online' => $onlineCount,
+                'task_count' => $taskCount,
+                'task_enabled' => $enabledTaskCount,
+
+                'period_success' => $curSuccess,
+                'period_failed'  => $curFailed,
+                'period_count'   => $curCount,
+                'period_size'    => $curSize,
+
+                'change' => [
+                    'success' => $this->pct($curSuccess, $prevSuccess),
+                    'failed'  => $this->pct($curFailed,  $prevFailed),
+                    'count'   => $this->pct($curCount,   $prevCount),
+                    'size'    => $this->pct($curSize,    $prevSize),
+                ],
+
+                'cumulative_count' => $cumCount,
+                'cumulative_size'  => $cumSize,
+
+                // 恢复统计（与备份统计同周期口径）；total = 0 时成功率无意义，返回 null
+                'restore' => [
+                    'total'        => $restoreTotal,
+                    'success'      => $restoreSuccess,
+                    'failed'       => $restoreFailed,
+                    'success_rate' => $restoreTotal > 0 ? round($restoreSuccess / $restoreTotal * 100, 1) : null,
+                    'total_size'   => $restoreSize,
+                ],
+            ],
+
+            'count_trend' => $countTrend,
+            'size_trend'  => $sizeTrend,
+
+            'recent_logs' => BackupLogResource::collection($recent)->resolve($request),
+            'recent_restores' => RestoreCommandResource::collection($recentRestores)->resolve($request),
+            'storages' => $storages,
+        ]);
+    }
+
+    /* ---------- 辅助方法 ---------- */
+
+    private function rangeConfig(string $range): array
+    {
+        return [
+            'day'      => ['days' => 1,   'label' => '近 24 小时'],
+            'week'     => ['days' => 7,   'label' => '近 7 天'],
+            'month'    => ['days' => 30,  'label' => '近 30 天'],
+            'quarter'  => ['days' => 90,  'label' => '近 3 个月'],
+            'halfyear' => ['days' => 180, 'label' => '近 6 个月'],
+            'year'     => ['days' => 365, 'label' => '近 12 个月'],
+        ][$range];
+    }
+
+    /**
+     * 生成时间分桶。返回 [{start, end, label}, ...]
+     */
+    private function buildBuckets(string $range, Carbon $now): array
+    {
+        $buckets = [];
+        switch ($range) {
+            case 'day':
+                // 12 个每 2 小时桶：22 小时前 → 现在
+                $start = $now->copy()->subHours(22)->startOfHour();
+                for ($i = 0; $i < 12; $i++) {
+                    $s = $start->copy()->addHours($i * 2);
+                    $e = $s->copy()->addHours(2);
+                    $buckets[] = [
+                        'start' => $s,
+                        'end' => $e,
+                        'label' => $s->format('H'),
+                    ];
+                }
+                break;
+
+            case 'week':
+                // 7 个每日桶：6 天前 → 今天
+                $start = $now->copy()->subDays(6)->startOfDay();
+                $weekMap = ['一', '二', '三', '四', '五', '六', '日'];
+                for ($i = 0; $i < 7; $i++) {
+                    $s = $start->copy()->addDays($i);
+                    $e = $s->copy()->addDay();
+                    $buckets[] = [
+                        'start' => $s,
+                        'end' => $e,
+                        'label' => '周' . $weekMap[$s->dayOfWeekIso - 1],
+                    ];
+                }
+                break;
+
+            case 'month':
+                // 4 个每周桶：3 周前 → 今天
+                $start = $now->copy()->subWeeks(3)->startOfWeek();
+                for ($i = 0; $i < 4; $i++) {
+                    $s = $start->copy()->addWeeks($i);
+                    $e = $s->copy()->addWeek();
+                    $buckets[] = [
+                        'start' => $s,
+                        'end' => $e,
+                        'label' => '第' . ($i + 1) . '周',
+                    ];
+                }
+                break;
+
+            case 'quarter':
+                // 3 个月桶
+                $months = 3;
+                $start = $now->copy()->subMonths($months - 1)->startOfMonth();
+                for ($i = 0; $i < $months; $i++) {
+                    $s = $start->copy()->addMonths($i);
+                    $e = $s->copy()->addMonth();
+                    $buckets[] = [
+                        'start' => $s,
+                        'end' => $e,
+                        'label' => $s->format('n') . '月',
+                    ];
+                }
+                break;
+
+            case 'halfyear':
+                $months = 6;
+                $start = $now->copy()->subMonths($months - 1)->startOfMonth();
+                for ($i = 0; $i < $months; $i++) {
+                    $s = $start->copy()->addMonths($i);
+                    $e = $s->copy()->addMonth();
+                    $buckets[] = [
+                        'start' => $s,
+                        'end' => $e,
+                        'label' => $s->format('n') . '月',
+                    ];
+                }
+                break;
+
+            case 'year':
+                $months = 12;
+                $start = $now->copy()->subMonths($months - 1)->startOfMonth();
+                for ($i = 0; $i < $months; $i++) {
+                    $s = $start->copy()->addMonths($i);
+                    $e = $s->copy()->addMonth();
+                    $buckets[] = [
+                        'start' => $s,
+                        'end' => $e,
+                        'label' => $s->format('n') . '月',
+                    ];
+                }
+                break;
+        }
+        return $buckets;
+    }
+
+    /**
+     * 计算变化百分比。null 表示上期为 0（无对比意义）
+     */
+    private function pct(int $cur, int $prev): ?float
+    {
+        if ($prev === 0) return null;
+        return round(($cur - $prev) / $prev * 100, 1);
+    }
+}

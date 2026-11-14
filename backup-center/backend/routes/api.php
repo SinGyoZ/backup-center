@@ -1,0 +1,117 @@
+<?php
+
+use App\Http\Controllers\Api\AgentCommandController;
+use App\Http\Controllers\Api\AgentController;
+use App\Http\Controllers\Api\AgentUpdateController;
+use App\Http\Controllers\Api\VersionController;
+use App\Http\Controllers\Api\AuthController;
+use App\Http\Controllers\Api\BackupLogController;
+use App\Http\Controllers\Api\DashboardController;
+use App\Http\Controllers\Api\NotificationSettingController;
+use App\Http\Controllers\Api\ResourcePoolController;
+use App\Http\Controllers\Api\RestoreController;
+use App\Http\Controllers\Api\ServerBrowseController;
+use App\Http\Controllers\Api\ServerController;
+use App\Http\Controllers\Api\StorageController;
+use App\Http\Controllers\Api\StorageFileController;
+use App\Http\Controllers\Api\SystemSettingController;
+use App\Http\Controllers\Api\TaskController;
+use Illuminate\Support\Facades\Route;
+
+/* ---------- 用户认证 ---------- */
+Route::post('/auth/login', [AuthController::class, 'login']);
+// 首次安装：没有任何用户时创建管理员（系统自己判断，User 表非空即 403）
+Route::get('/auth/bootstrap-status', [AuthController::class, 'bootstrapStatus']);
+Route::post('/auth/bootstrap', [AuthController::class, 'bootstrap']);
+
+/* 部署包版本（构建时写入 backend/VERSION，公开可读，供页脚/健康检查展示真实版本） */
+Route::get('/version', [VersionController::class, 'show']);
+
+/* ---------- Agent 通信（Token via header, 不是 Sanctum） ---------- */
+Route::prefix('agent')->middleware('agent')->group(function () {
+    Route::post('/register', [AgentController::class, 'register']);
+    Route::post('/heartbeat', [AgentController::class, 'heartbeat']);
+    Route::get('/commands/pending', [AgentController::class, 'pendingCommands']);
+    Route::get('/tasks', [AgentController::class, 'tasks']);
+    Route::post('/report', [AgentController::class, 'report']);
+    Route::post('/upload-report', [AgentController::class, 'uploadReport']);
+    Route::post('/command-result', [AgentController::class, 'commandResult']);
+    Route::post('/command-progress', [AgentController::class, 'commandProgress']);
+});
+
+/* ---------- Web 管理后台（Sanctum token） ---------- */
+Route::middleware('auth:sanctum')->group(function () {
+    Route::get('/auth/me', [AuthController::class, 'me']);
+    Route::post('/auth/logout', [AuthController::class, 'logout']);
+
+    // 用户资料
+    Route::put('/auth/profile', [AuthController::class, 'updateProfile']);
+    Route::put('/auth/password', [AuthController::class, 'updatePassword']);
+    Route::get('/auth/login-logs', [AuthController::class, 'loginLogs']);
+
+    // 系统设置（系统名、时区等）
+    Route::get('/system-settings', [SystemSettingController::class, 'show']);
+    Route::put('/system-settings', [SystemSettingController::class, 'update']);
+    Route::get('/system/footer-stats', [SystemSettingController::class, 'footerStats']);
+
+    // Dashboard 汇总
+    Route::get('/dashboard', [DashboardController::class, 'index']);
+
+    // Agent 版本 + 升级下发（注意：bulk 路由必须在 apiResource 之前）
+    Route::get('/agent-latest-version', [AgentUpdateController::class, 'latestVersion']);
+    Route::post('/servers/bulk-agent-update', [AgentUpdateController::class, 'bulkDispatch']);
+    Route::post('/servers/{server}/agent-update', [AgentUpdateController::class, 'dispatchOne']);
+
+    // 服务器管理
+    Route::apiResource('servers', ServerController::class);
+    Route::post('/servers/{server}/regenerate-token', [ServerController::class, 'regenerateToken']);
+    // 备份目录浏览（v1.1.2）：下发 browse_dir 指令，前端轮询 agent-commands/{id} 拿结果
+    Route::post('/servers/{server}/browse', [ServerBrowseController::class, 'store']);
+
+    // 备份任务管理
+    Route::apiResource('tasks', TaskController::class);
+    Route::post('/tasks/{task}/sync-now', [TaskController::class, 'syncNow']);
+    Route::post('/tasks/{task}/pack-now', [TaskController::class, 'packNow']);
+    Route::post('/tasks/{task}/incremental-backup', [TaskController::class, 'incrementalBackupNow']);
+
+    // 指令状态查询（同步/打包/快照等下发后前端轮询执行结果）
+    Route::get('/agent-commands/{command}', [AgentCommandController::class, 'show']);
+
+    // 系统一键备份（把 Backup Center 自己打包上传到强制备份存储）
+    Route::post('/system/backup', [SystemSettingController::class, 'backupNow']);
+
+    // 备份记录
+    Route::get('/backup-logs', [BackupLogController::class, 'index']);
+    Route::get('/backup-logs/{backupLog}', [BackupLogController::class, 'show']);
+    Route::post('/backup-logs/{backupLog}/restore', [BackupLogController::class, 'restore']);
+    Route::get('/backup-logs/{backupLog}/restore-status', [BackupLogController::class, 'restoreStatus']);
+    Route::delete('/backup-logs/{backupLog}', [BackupLogController::class, 'destroy']);
+
+    // 数据恢复（P2：独立栏目，按任务+日期分组的整套恢复）
+    Route::get('/restore/tasks', [RestoreController::class, 'tasks']);
+    Route::get('/restore/backups', [RestoreController::class, 'backups']);
+    Route::post('/restore', [RestoreController::class, 'store']);
+    Route::get('/restore/status', [RestoreController::class, 'status']);
+
+    // 存储（Rclone 配置）
+    Route::apiResource('storages', StorageController::class);
+    Route::post('/storages/{storage}/test', [StorageController::class, 'test']);
+    Route::get('/storages/{storage}/files', [StorageFileController::class, 'index']);
+    // 未保存存储的目录预览（新建态表单浏览，按提交的 type/config/base_path 列目录）
+    Route::post('/storages/preview-files', [StorageFileController::class, 'preview']);
+    Route::get('/storages-mandatory', [StorageController::class, 'mandatory']);
+
+    // 资源池（COS/OSS 对象存储，用于 Agent 二进制分发 + 用户上传的静态资源）
+    Route::apiResource('resource-pools', ResourcePoolController::class);
+    Route::post('/resource-pools/{resourcePool}/test', [ResourcePoolController::class, 'test']);
+    Route::get('/resource-pools/{resourcePool}/files', [ResourcePoolController::class, 'listFiles']);
+    Route::post('/resource-pools/{resourcePool}/files', [ResourcePoolController::class, 'uploadFile']);
+    Route::post('/resource-pools/{resourcePool}/files/remark', [ResourcePoolController::class, 'updateFileRemark']);
+    Route::delete('/resource-pools/{resourcePool}/files', [ResourcePoolController::class, 'deleteFile']);
+
+
+    // 通知设置
+    Route::get('/notification-settings', [NotificationSettingController::class, 'show']);
+    Route::put('/notification-settings', [NotificationSettingController::class, 'update']);
+    Route::post('/notification-settings/test', [NotificationSettingController::class, 'test']);
+});

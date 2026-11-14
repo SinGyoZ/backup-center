@@ -1,0 +1,361 @@
+package client
+
+import (
+	"bytes"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"strings"
+	"time"
+
+	"github.com/SinGyoZ/backup-center/agent/internal/sysinfo"
+)
+
+type Client struct {
+	baseURL string
+	token   string
+	version string
+	http    *http.Client
+}
+
+func New(baseURL, token, version string) *Client {
+	return &Client{
+		baseURL: strings.TrimRight(baseURL, "/"),
+		token:   token,
+		version: version,
+		http: &http.Client{
+			Timeout: 30 * time.Second,
+		},
+	}
+}
+
+// ---------- 数据类型（Agent 侧共用） ----------
+
+// BackupPath 任务的一条备份目录：path 扫描/打包根，pattern 为 external 扫描的
+// glob 过滤，label 用于产物命名与快照目录分层（空 label 按序号 d1/d2… 兜底）。
+type BackupPath struct {
+	Path    string `json:"path"`
+	Pattern string `json:"pattern"`
+	Label   string `json:"label"`
+}
+
+// Task 备份任务（v0.16 起取代原 Website 实体）
+type Task struct {
+	ID   int64  `json:"id"`
+	Name string `json:"name"`
+	// BackupPaths 备份目录清单：external 扫描与 pack/incremental 备份均按此逐目录执行
+	BackupPaths []BackupPath `json:"backup_paths"`
+	// 保留期（天）：超期归档由 Center 派 cleanup_retention 清理
+	RetentionDays int `json:"retention_days"`
+	// 同步方式：auto=Agent 定时自动扫描（默认）；scheduled=Agent 不主动扫，等 Center 派 sync_now
+	SyncMode string `json:"sync_mode"`
+	// 该任务的有效存储 ID 列表
+	StorageIDs []int64 `json:"storage_ids"`
+	// 备份产物来源：external=扫描已存在文件；self=Agent 主动打包（pack_backup / incremental_backup）
+	BackupSource string `json:"backup_source"`
+	// 备份方式：full=全量打包；incremental=rsync 硬链快照
+	BackupMode string `json:"backup_mode"`
+	// 增量备份目标存储 ID（必须是 SFTP + SSH 私钥 + 未加密存储）
+	IncrementalStorageID int64 `json:"incremental_storage_id"`
+}
+
+// EffectivePaths 返回实际扫描用的路径列表（即 backup_paths）。
+func (t *Task) EffectivePaths() []BackupPath {
+	return t.BackupPaths
+}
+
+type Storage struct {
+	ID          int64                  `json:"id"`
+	Name        string                 `json:"name"`
+	Type        string                 `json:"type"` // sftp | webdav | s3
+	IsMandatory bool                   `json:"is_mandatory"`
+	BasePath    string                 `json:"base_path"`
+	Config      map[string]interface{} `json:"config"`
+}
+
+type TasksData struct {
+	Tasks    []Task    `json:"tasks"`
+	Storages []Storage `json:"storages"`
+}
+
+// ---------- 请求 / 响应 ----------
+
+type registerRequest struct {
+	AgentVersion string `json:"agent_version"`
+	Hostname     string `json:"hostname,omitempty"`
+	OSType       string `json:"os_type,omitempty"`
+	Kernel       string `json:"kernel,omitempty"`
+	Arch         string `json:"arch,omitempty"`
+	IP           string `json:"ip,omitempty"`
+}
+
+type RegisterResponse struct {
+	OK         bool   `json:"ok"`
+	ServerID   int64  `json:"server_id"`
+	ServerName string `json:"server_name"`
+	Config     struct {
+		HeartbeatInterval   int    `json:"heartbeat_interval"`
+		TaskRefreshInterval int    `json:"task_refresh_interval"`
+		ScanInterval        int    `json:"scan_interval"`
+		ReportEndpoint      string `json:"report_endpoint"`
+	} `json:"config"`
+}
+
+type heartbeatRequest struct {
+	AgentVersion string      `json:"agent_version"`
+	CPUUsage     float64     `json:"cpu_usage"`
+	MemUsage     float64     `json:"mem_usage"`
+	DiskUsage    float64     `json:"disk_usage"`
+	Uptime       int64       `json:"uptime,omitempty"`
+	Disks        []diskEntry `json:"disks,omitempty"`
+}
+
+type PendingCommand struct {
+	ID     int64                  `json:"id"`
+	Type   string                 `json:"type"`
+	Params map[string]interface{} `json:"params"`
+}
+
+type HeartbeatResponse struct {
+	OK              bool            `json:"ok"`
+	ServerTime      string          `json:"server_time"`
+	NextHeartbeatIn int             `json:"next_heartbeat_in"`
+	PendingCommand  *PendingCommand `json:"pending_command,omitempty"`
+	// MirrorURL：Center 下发的 Agent 二进制 CDN 镜像 URL 前缀（可空表示"清空 mirror"）
+	// 每次心跳都携带；Agent 端拿到跟本地 config 不一致时更新 config
+	AgentMirrorURL string `json:"agent_mirror_url"`
+}
+
+type CommandResultRequest struct {
+	CommandID int64  `json:"command_id"`
+	Status    string `json:"status"` // success | failed
+	Output    string `json:"output,omitempty"`
+	Error     string `json:"error,omitempty"`
+}
+
+type CommandProgressRequest struct {
+	CommandID int64  `json:"command_id"`
+	Output    string `json:"output"`
+}
+
+type diskEntry struct {
+	Mount     string `json:"mount"`
+	FS        string `json:"fs"`
+	Total     uint64 `json:"total"`
+	Used      uint64 `json:"used"`
+	Available uint64 `json:"available"`
+}
+
+type tasksResponse struct {
+	OK       bool      `json:"ok"`
+	Tasks    []Task    `json:"tasks"`
+	Storages []Storage `json:"storages"`
+}
+
+type UploadReportRequest struct {
+	BackupLogID     int64  `json:"backup_log_id"`
+	StorageID       int64  `json:"storage_id"`
+	Status          string `json:"status"` // pending|uploading|uploaded|failed
+	RemotePath      string `json:"remote_path,omitempty"`
+	UploadedBytes   int64  `json:"uploaded_bytes,omitempty"`
+	DurationSeconds int    `json:"duration_seconds,omitempty"`
+	ErrorMessage    string `json:"error_message,omitempty"`
+}
+
+type UploadReportResponse struct {
+	OK       bool  `json:"ok"`
+	UploadID int64 `json:"upload_id"`
+	Created  bool  `json:"created"`
+}
+
+type ReportRequest struct {
+	TaskID          int64  `json:"task_id"`
+	Filename        string `json:"filename"`
+	FullPath        string `json:"full_path,omitempty"`
+	Size            int64  `json:"size,omitempty"`
+	BackupAt        string `json:"backup_at"` // ISO 8601
+	Status          string `json:"status,omitempty"`
+	DurationSeconds int    `json:"duration_seconds,omitempty"`
+	// BatchCode 任务编码：pack_backup / incremental_backup 指令 ID（一次指令的全部产物带同一编码）。
+	// Center 据此对高级模式/增量模式的备份按编码精确分组，替代时间窗口猜测。
+	// external 扫描上报不带此字段。
+	BatchCode string `json:"batch_code,omitempty"`
+	// OriginPath 备份来源目录（v0.16 新增，可空）：external 扫描=发现文件所在目录；
+	// pack/incremental=backup_paths 中该产物的源目录（绝对路径）。
+	// Center 据此在 advanced 恢复时定位解压目标（origin_path 的父目录）。
+	OriginPath string `json:"origin_path,omitempty"`
+	// SourceType 打包产物来源类型（v0.18.0 新增，可空）：dir=整目录打包 | file=单文件打包。
+	// 新命名压缩包文件名不再携带 -dir-/-file- 标记，Center 靠此字段直写 source_key
+	// （self:dir / self:file）；external 扫描上报不带此字段（走文件名推导）。
+	SourceType string `json:"source_type,omitempty"`
+}
+
+type ReportResponse struct {
+	OK      bool  `json:"ok"`
+	LogID   int64 `json:"log_id"`
+	Created bool  `json:"created"`
+}
+
+// 注：Report 端点已支持返回 log_id（backend/AgentController::report）
+
+// ---------- 错误 ----------
+
+type APIError struct {
+	Status  int
+	Code    string
+	Message string
+}
+
+func (e *APIError) Error() string {
+	return fmt.Sprintf("api error status=%d code=%s: %s", e.Status, e.Code, e.Message)
+}
+
+func IsAuthError(err error) bool {
+	var apiErr *APIError
+	if errors.As(err, &apiErr) {
+		return apiErr.Status == 401
+	}
+	return false
+}
+
+// ---------- API 方法 ----------
+
+func (c *Client) Register(info *sysinfo.BasicInfo) (*RegisterResponse, error) {
+	req := registerRequest{
+		AgentVersion: c.version,
+		Hostname:     info.Hostname,
+		OSType:       info.OSType,
+		Kernel:       info.Kernel,
+		Arch:         info.Arch,
+		IP:           info.IP,
+	}
+	var resp RegisterResponse
+	if err := c.post("/api/agent/register", req, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+func (c *Client) Heartbeat(m *sysinfo.Metrics) (*HeartbeatResponse, error) {
+	req := heartbeatRequest{AgentVersion: c.version}
+	if m != nil {
+		req.CPUUsage = m.CPU
+		req.MemUsage = m.Memory
+		req.DiskUsage = m.Disk
+		req.Uptime = m.Uptime
+		for _, d := range m.Disks {
+			req.Disks = append(req.Disks, diskEntry{
+				Mount:     d.Mount,
+				FS:        d.FS,
+				Total:     d.Total,
+				Used:      d.Used,
+				Available: d.Available,
+			})
+		}
+	}
+	var resp HeartbeatResponse
+	if err := c.post("/api/agent/heartbeat", req, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+func (c *Client) CommandResult(req *CommandResultRequest) error {
+	return c.post("/api/agent/command-result", req, nil)
+}
+
+// PullPendingCommand（v0.17.0）指令快速拉取通道：轻量 GET 一条 pending 指令
+// （与心跳下发消费同一队列，Center 端原子标记 dispatched，无重复消费）。
+// 无待处理指令时返回 (nil, nil)。
+func (c *Client) PullPendingCommand() (*PendingCommand, error) {
+	var resp struct {
+		OK              bool            `json:"ok"`
+		PendingCommand  *PendingCommand `json:"pending_command,omitempty"`
+	}
+	if err := c.get("/api/agent/commands/pending", &resp); err != nil {
+		return nil, err
+	}
+	return resp.PendingCommand, nil
+}
+
+// CommandProgress 上报长任务（如 restore）执行期间的进度文本（不改终态）
+func (c *Client) CommandProgress(req *CommandProgressRequest) error {
+	return c.post("/api/agent/command-progress", req, nil)
+}
+
+// TasksFull 拉任务和存储清单
+func (c *Client) TasksFull() (*TasksData, error) {
+	var resp tasksResponse
+	if err := c.get("/api/agent/tasks", &resp); err != nil {
+		return nil, err
+	}
+	return &TasksData{Tasks: resp.Tasks, Storages: resp.Storages}, nil
+}
+
+func (c *Client) UploadReport(req *UploadReportRequest) (*UploadReportResponse, error) {
+	var resp UploadReportResponse
+	if err := c.post("/api/agent/upload-report", req, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+func (c *Client) Report(req *ReportRequest) (*ReportResponse, error) {
+	var resp ReportResponse
+	if err := c.post("/api/agent/report", req, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+// ---------- HTTP 底层 ----------
+
+func (c *Client) post(path string, body any, out any) error {
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return err
+	}
+	return c.do(http.MethodPost, path, bytes.NewReader(buf), out)
+}
+
+func (c *Client) get(path string, out any) error {
+	return c.do(http.MethodGet, path, nil, out)
+}
+
+func (c *Client) do(method, path string, body io.Reader, out any) error {
+	req, err := http.NewRequest(method, c.baseURL+path, body)
+	if err != nil {
+		return err
+	}
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("X-Agent-Token", c.token)
+	req.Header.Set("User-Agent", "backup-agent/"+c.version)
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	data, _ := io.ReadAll(resp.Body)
+
+	if resp.StatusCode >= 400 {
+		var e struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		}
+		_ = json.Unmarshal(data, &e)
+		return &APIError{Status: resp.StatusCode, Code: e.Code, Message: e.Message}
+	}
+	if out != nil {
+		if err := json.Unmarshal(data, out); err != nil {
+			return fmt.Errorf("解析响应 JSON: %w", err)
+		}
+	}
+	return nil
+}

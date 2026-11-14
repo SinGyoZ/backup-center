@@ -1,0 +1,9 @@
+# 敏感文件
+ssl/
+.env
+
+# 本地生成的前端构建产物
+frontend-dist/
+
+# 本地生成的 Agent 二进制（由 scripts/build-release.sh 产出）
+agent-dist/

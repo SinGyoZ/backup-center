@@ -1,0 +1,1005 @@
+/* ============================================================
+   Backup Center · Design Tokens v2 「青瓷 Porcelain」
+   原则：
+   1. 层次靠明度递进，不靠加线
+   2. 边界用半透明，不用实色
+   3. 彩色面积 < 5%，只标记可点击与当前状态
+   4. 轻 = 低透明度多层柔光，不是没有阴影
+   5. 数字是可读性第一公民（tabular-nums）
+   说明：保留 v1 全部变量名，组件零改动即可生效
+   ============================================================ */
+
+/* ============================================================
+   自托管 Didone 数字字体 —— 为 --bc-font-num 提供与平台无关的衬线数字
+   问题：macOS 有 Didot、Windows 有 Georgia，Linux 会退化到系统无衬线，
+         字号/字重再怎么调都丢了"衬线衬线体"的设计意图。
+   方案：不引 CDN（ops 机器可能在隔离网络），自托管 Playfair Display SemiBold，
+         用 fontTools 子集化为「数字 + 单位字母」→ 约 5KB 而非数百 KB。
+   约束：unicode-range 严格限定，中文及其余字符完全不命中该字体，
+         自然回退到后续字体链；整条 fallback 链原样保留。
+   源文件：Playfair Display SemiBold（SIL Open Font License 1.1）
+   许可证：src/assets/fonts/OFL.txt
+   子集字符：0-9 空格 . , - + % B K M G T
+   ============================================================ */
+@font-face {
+  font-family: 'Playfair Display Num';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url('./assets/fonts/playfair-display-nums-600.woff2') format('woff2');
+  /* U+0020 空格  U+0025 %  U+002B +  U+002C ,  U+002D -  U+002E .
+     U+0030-0039 0-9  U+0042 B  U+0047 G  U+004B K  U+004D M  U+0054 T */
+  unicode-range: U+0020, U+0025, U+002B, U+002C, U+002D, U+002E, U+0030-0039,
+                 U+0042, U+0047, U+004B, U+004D, U+0054;
+}
+
+:root {
+  /* ---------- 背景：明度递进 ---------- */
+  --bc-bg-page:      #f4f6f8;
+  --bc-bg-card:      #ffffff;
+  --bc-bg-sidebar:   #fbfcfd;
+  --bc-bg-header:    #ffffff;
+  --bc-bg-hover:     #eef1f4;
+  --bc-bg-active:    #e6eaee;
+  --bc-bg-inset:     #f7f9fa;
+  --bc-bg-elevated:  #ffffff;
+  --bc-bg-overlay:   rgba(16, 24, 40, .32);
+  /* P1-10 §5.1 loading 遮罩：半透明到能读出底层数据（规格 §5.1.2） */
+  --bc-loading-mask: rgba(244, 246, 248, .62);
+
+  /* ---------- 边框：半透明四档 ---------- */
+  --bc-border:        rgba(16, 24, 40, .10);
+  --bc-border-light:  rgba(16, 24, 40, .07);
+  --bc-border-hair:   rgba(16, 24, 40, .05);
+  --bc-border-strong: rgba(16, 24, 40, .16);
+
+  /* ---------- 文字 ---------- */
+  --bc-text-primary:     #131a23;
+  --bc-text-regular:     #3a4552;
+  --bc-text-secondary:   #66717f;
+  --bc-text-placeholder: #8a94a0;
+
+  /* ---------- 侧栏 ---------- */
+  --bc-sidebar-text:        #3a4552;
+  --bc-sidebar-text-hover:  #131a23;
+  --bc-sidebar-active-bg:   #e9f5f9;
+  --bc-sidebar-active-text: #0f6e8c;
+
+  /* ---------- 主色：青瓷 Teal（h≈194）---------- */
+  --bc-primary:        #0f6e8c;
+  --bc-primary-hover:  #0c5870;
+  --bc-primary-active: #0a4a60;
+  --bc-primary-light:  #e9f5f9;
+  --bc-primary-50:  #e9f5f9;
+  --bc-primary-100: #d6eef4;
+  --bc-primary-200: #afdde8;
+  --bc-primary-400: #45a5bd;
+  --bc-primary-500: #1b87a1;
+  --bc-primary-700: #0c5870;
+  --bc-primary-800: #0a4a60;
+
+  /* ---------- 语义色 ---------- */
+  --bc-success: #0f7a52;
+  --bc-warning: #96600e;
+  --bc-danger:  #c0353b;
+  --bc-info:    #4c63d2;
+  --bc-brand-warm: #c98a3c;
+  --bc-on-accent: #ffffff;
+
+  --bc-success-bg: #e7f5ee;  --bc-success-border: #bee2ce;
+  --bc-warning-bg: #fbf2e3;  --bc-warning-border: #efddbe;
+  --bc-danger-bg:  #fbeaea;  --bc-danger-border:  #f0caca;
+  --bc-info-bg:    #edeffb;  --bc-info-border:    #d3d9f4;
+
+  /* ---------- 圆角 ---------- */
+  --bc-radius-xs:   4px;
+  --bc-radius-sm:   6px;
+  --bc-radius:      10px;
+  --bc-radius-lg:   14px;
+  --bc-radius-xl:   20px;
+  --bc-radius-full: 999px;
+
+  /* ---------- 阴影：低透明度多层柔光 ---------- */
+  --bc-shadow-xs: 0 1px 2px rgba(16, 24, 40, .04);
+  --bc-shadow-sm: 0 1px 2px rgba(16, 24, 40, .04), 0 1px 3px rgba(16, 24, 40, .03);
+  --bc-shadow:    0 2px 4px rgba(16, 24, 40, .04), 0 4px 10px -2px rgba(16, 24, 40, .05);
+  --bc-shadow-lg: 0 8px 20px -6px rgba(16, 24, 40, .10), 0 2px 6px -2px rgba(16, 24, 40, .04);
+  --bc-shadow-xl: 0 24px 48px -12px rgba(16, 24, 40, .18), 0 8px 16px -8px rgba(16, 24, 40, .08);
+  --bc-shadow-inset: inset 0 1px 0 rgba(255, 255, 255, .60);
+
+  /* ---------- Focus ring ---------- */
+  --bc-ring:        0 0 0 3px rgba(15, 110, 140, .16);
+  --bc-ring-danger: 0 0 0 3px rgba(192, 53, 59, .16);
+  /* P0-2 · WCAG 2.2 SC 1.4.11：焦点指示需 ≥3:1 对比度。
+     上面的 rgba 仅 ~1.1:1（半透明叠白底几乎不可见），故另设不透明实色版。
+     浅色基于主色 #0f6e8c → 对白底 5.79:1 */
+  --bc-ring-a11y:        0 0 0 3px #0f6e8c;
+  --bc-ring-a11y-danger: 0 0 0 3px #c0353b;
+  /* 内缩版：供 overflow:hidden 容器内的元素使用，避免焦点环被父级裁掉 */
+  --bc-ring-a11y-inset:        inset 0 0 0 3px #0f6e8c;
+  --bc-ring-a11y-inset-danger: inset 0 0 0 3px #c0353b;
+
+  /* ---------- 毛玻璃（可选）---------- */
+  --bc-glass-bg:   rgba(255, 255, 255, .72);
+  --bc-glass-blur: blur(12px) saturate(1.6);
+
+  /* ---------- 动效 ---------- */
+  --bc-dur-fast: 120ms;
+  --bc-dur:      180ms;
+  --bc-dur-slow: 260ms;
+  --bc-ease:        cubic-bezier(.4, 0, .2, 1);
+  --bc-ease-out:    cubic-bezier(.16, 1, .3, 1);
+  --bc-ease-spring: cubic-bezier(.34, 1.56, .64, 1);
+
+  /* ---------- 字体 ---------- */
+  --bc-font-sans: 'Inter var', Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI',
+                  Roboto, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei',
+                  'Helvetica Neue', Arial, sans-serif;
+  --bc-font-num:  'Playfair Display Num', 'Didot', 'Bodoni MT', 'Bodoni 72',
+                  'Playfair Display', 'Bodoni Moda', 'Noto Serif Display',
+                  Georgia, 'Times New Roman', var(--bc-font-sans);
+  --bc-font-mono: 'JetBrains Mono', 'SFMono-Regular', 'SF Mono', Menlo, Consolas,
+                  'Liberation Mono', ui-monospace, monospace;
+
+  /* ---------- 字号 / 行高 / 字距 ---------- */
+  --bc-fs-2xs: 11px;  --bc-fs-xs: 12px;    --bc-fs-sm: 13px;
+  --bc-fs-base: 14px; --bc-fs-md: 15px;    --bc-fs-lg: 16px;
+  --bc-fs-xl: 18px;   --bc-fs-2xl: 20px;   --bc-fs-display: 28px; --bc-fs-hero: 32px;
+  --bc-lh-tight: 1.2; --bc-lh-snug: 1.4;   --bc-lh-normal: 1.55; --bc-lh-relaxed: 1.65;
+  --bc-tracking-tight: -.01em; --bc-tracking-normal: 0;
+  --bc-tracking-wide: .02em;   --bc-tracking-caps: .06em;
+
+  /* ---------- 间距（4pt 基准）---------- */
+  --bc-space-1: 4px;  --bc-space-2: 8px;   --bc-space-3: 12px;
+  --bc-space-4: 16px; --bc-space-5: 20px;  --bc-space-6: 24px;
+  --bc-space-8: 32px; --bc-space-10: 40px; --bc-space-12: 48px;
+
+  /* ---------- 内容最大宽度（超宽屏不铺满）---------- */
+  --bc-container:     1680px;
+  --bc-container-doc: 1120px;
+
+  /* ---------- 图表 ---------- */
+  --bc-chart-1: #0f6e8c; --bc-chart-2: #4c86c6; --bc-chart-3: #6e7bc8;
+  --bc-chart-4: #b08a3e; --bc-chart-5: #2e9b76; --bc-chart-6: #a8566b;
+  --bc-chart-grid: rgba(16, 24, 40, .07);
+  --bc-chart-axis: #66717f;
+
+  /* ============================================================
+     Element Plus 映射（浅色）
+     ============================================================ */
+  --el-color-primary: var(--bc-primary);
+  --el-color-primary-light-3: #5799af;
+  --el-color-primary-light-5: #7fb7c6;
+  --el-color-primary-light-7: #b7d4dd;
+  --el-color-primary-light-8: #cfe2e8;
+  --el-color-primary-light-9: #e7f1f4;
+  --el-color-primary-dark-2:  #0c5870;
+
+  --el-color-success: var(--bc-success);
+  --el-color-warning: var(--bc-warning);
+  --el-color-danger:  var(--bc-danger);
+  --el-color-error:   var(--bc-danger);
+  --el-color-info:    var(--bc-info);
+
+  --el-border-radius-base:  var(--bc-radius);
+  --el-border-radius-small: var(--bc-radius-sm);
+  --el-border-radius-big:   var(--bc-radius-lg);
+  --el-border-radius-round: 999px;
+
+  --el-text-color-primary:     var(--bc-text-primary);
+  --el-text-color-regular:     var(--bc-text-regular);
+  --el-text-color-secondary:   var(--bc-text-secondary);
+  --el-text-color-placeholder: var(--bc-text-placeholder);
+  --el-text-color-disabled:    var(--bc-text-placeholder);
+
+  --el-border-color:           var(--bc-border);
+  --el-border-color-light:     var(--bc-border-light);
+  --el-border-color-lighter:   var(--bc-border-hair);
+  --el-border-color-extra-light: var(--bc-border-hair);
+  --el-border-color-dark:      var(--bc-border-strong);
+  --el-border-color-darker:    var(--bc-border-strong);
+
+  --el-fill-color:        #eef1f4;
+  --el-fill-color-light:  #f4f6f8;
+  --el-fill-color-lighter:#f7f9fa;
+  --el-fill-color-blank:  var(--bc-bg-card);
+  --el-fill-color-dark:   #e6eaee;
+  --el-fill-color-darker: #dde2e7;
+
+  --el-bg-color:          var(--bc-bg-card);
+  --el-bg-color-page:     var(--bc-bg-page);
+  --el-bg-color-overlay:  var(--bc-bg-elevated);
+
+  --el-box-shadow:        var(--bc-shadow);
+  --el-box-shadow-light:  var(--bc-shadow-sm);
+  --el-box-shadow-lighter:var(--bc-shadow-xs);
+  --el-box-shadow-dark:   var(--bc-shadow-lg);
+
+  --el-transition-duration:      var(--bc-dur);
+  --el-transition-duration-fast: var(--bc-dur-fast);
+  --el-transition-function-ease-in-out-bezier: var(--bc-ease);
+
+  --el-font-size-extra-small: var(--bc-fs-2xs);
+  --el-font-size-small:       var(--bc-fs-xs);
+  --el-font-size-base:        var(--bc-fs-sm);
+  --el-font-size-medium:      var(--bc-fs-base);
+  --el-font-size-large:       var(--bc-fs-lg);
+}
+
+/* ============================================================
+   深色主题
+   注意：必须同时覆盖 --el-*，否则会被 element-plus/theme-chalk/dark/css-vars.css
+   的 html.dark（特异性 0,1,1）压过 :root（0,1,0），EP 组件会保持自带蓝/黑
+   ============================================================ */
+html.dark {
+  --bc-bg-page:      #0d1117;
+  --bc-bg-card:      #151a21;
+  --bc-bg-sidebar:   #10151b;
+  --bc-bg-header:    #10151b;
+  --bc-bg-hover:     #1e252f;
+  --bc-bg-active:    #232b36;
+  --bc-bg-inset:     #11161c;
+  --bc-bg-elevated:  #1b212a;
+  --bc-bg-overlay:   rgba(0, 0, 0, .55);
+  /* 深色下若沿用浅色遮罩会整片发白，故单独给一层深色半透明 */
+  --bc-loading-mask: rgba(13, 17, 23, .62);
+
+  --bc-border:        rgba(255, 255, 255, .12);
+  --bc-border-light:  rgba(255, 255, 255, .08);
+  --bc-border-hair:   rgba(255, 255, 255, .05);
+  --bc-border-strong: rgba(255, 255, 255, .20);
+
+  --bc-text-primary:     #e9eef4;
+  --bc-text-regular:     #c3cbd5;
+  --bc-text-secondary:   #8b97a5;
+  --bc-text-placeholder: #6b7785;
+
+  --bc-sidebar-text:        #c3cbd5;
+  --bc-sidebar-text-hover:  #e9eef4;
+  --bc-sidebar-active-bg:   rgba(51, 180, 208, .14);
+  --bc-sidebar-active-text: #33b4d0;
+
+  --bc-primary:        #33b4d0;
+  --bc-primary-hover:  #57c6dc;
+  --bc-primary-active: #2a9ab4;
+  --bc-primary-light:  rgba(51, 180, 208, .14);
+  --bc-primary-50:  rgba(51, 180, 208, .14);
+  --bc-primary-100: rgba(51, 180, 208, .22);
+  --bc-primary-200: #2a9ab4;
+  --bc-primary-400: #57c6dc;
+  --bc-primary-500: #2fa8c2;
+  --bc-primary-700: #2a9ab4;
+  --bc-primary-800: #1f7f96;
+
+  --bc-success: #3fbe8b;
+  --bc-warning: #d99a3e;
+  --bc-danger:  #e76a6e;
+  --bc-info:    #8098f0;
+  --bc-brand-warm: #d9a45e;
+  --bc-on-accent: #08131a;
+
+  --bc-success-bg: rgba(63, 190, 139, .14);  --bc-success-border: rgba(63, 190, 139, .30);
+  --bc-warning-bg: rgba(217, 154, 62, .14);  --bc-warning-border: rgba(217, 154, 62, .30);
+  --bc-danger-bg:  rgba(231, 106, 110, .14); --bc-danger-border:  rgba(231, 106, 110, .30);
+  --bc-info-bg:    rgba(128, 152, 240, .14); --bc-info-border:    rgba(128, 152, 240, .30);
+
+  --bc-shadow-xs: 0 1px 2px rgba(0, 0, 0, .30);
+  --bc-shadow-sm: 0 1px 2px rgba(0, 0, 0, .30), 0 1px 3px rgba(0, 0, 0, .20);
+  --bc-shadow:    0 2px 6px rgba(0, 0, 0, .35), 0 4px 12px -2px rgba(0, 0, 0, .30);
+  --bc-shadow-lg: 0 10px 24px -6px rgba(0, 0, 0, .50), 0 2px 8px -2px rgba(0, 0, 0, .35);
+  --bc-shadow-xl: 0 28px 56px -12px rgba(0, 0, 0, .65), 0 8px 16px -8px rgba(0, 0, 0, .45);
+  --bc-shadow-inset: inset 0 1px 0 rgba(255, 255, 255, .04);
+
+  --bc-ring:        0 0 0 3px rgba(51, 180, 208, .28);
+  --bc-ring-danger: 0 0 0 3px rgba(231, 106, 110, .28);
+  /* P0-2 深色版：基于深色主色 #33b4d0 → 对深色卡底(#151a21) 7.14:1 */
+  --bc-ring-a11y:        0 0 0 3px #33b4d0;
+  --bc-ring-a11y-danger: 0 0 0 3px #e76a6e;
+  --bc-ring-a11y-inset:        inset 0 0 0 3px #33b4d0;
+  --bc-ring-a11y-inset-danger: inset 0 0 0 3px #e76a6e;
+
+  --bc-glass-bg: rgba(16, 21, 27, .72);
+
+  --bc-chart-1: #33b4d0; --bc-chart-2: #6ba3dc; --bc-chart-3: #8f9ada;
+  --bc-chart-4: #d9a45e; --bc-chart-5: #4fc59a; --bc-chart-6: #c87a8d;
+  --bc-chart-grid: rgba(255, 255, 255, .07);
+  --bc-chart-axis: #8b97a5;
+
+  /* ---- Element Plus 深色覆盖（关键，勿删）---- */
+  --el-color-primary: #33b4d0;
+  --el-color-primary-light-3: #57c6dc;
+  --el-color-primary-light-5: #7fd4e5;
+  --el-color-primary-light-7: #a8e2ee;
+  --el-color-primary-light-8: #bce9f2;
+  --el-color-primary-light-9: #1e3440;
+  --el-color-primary-dark-2:  #2a9ab4;
+
+  --el-color-success: var(--bc-success);
+  --el-color-warning: var(--bc-warning);
+  --el-color-danger:  var(--bc-danger);
+  --el-color-error:   var(--bc-danger);
+  --el-color-info:    var(--bc-info);
+
+  --el-text-color-primary:     var(--bc-text-primary);
+  --el-text-color-regular:     var(--bc-text-regular);
+  --el-text-color-secondary:   var(--bc-text-secondary);
+  --el-text-color-placeholder: var(--bc-text-placeholder);
+  --el-text-color-disabled:    var(--bc-text-placeholder);
+
+  --el-border-color:           var(--bc-border);
+  --el-border-color-light:     var(--bc-border-light);
+  --el-border-color-lighter:   var(--bc-border-hair);
+  --el-border-color-extra-light: var(--bc-border-hair);
+  --el-border-color-dark:      var(--bc-border-strong);
+
+  --el-fill-color:        #1e252f;
+  --el-fill-color-light:  #1b212a;
+  --el-fill-color-lighter:#191f27;
+  --el-fill-color-blank:  var(--bc-bg-card);
+  --el-fill-color-dark:   #253040;
+  --el-fill-color-darker: #2d3949;
+
+  --el-bg-color:          var(--bc-bg-card);
+  --el-bg-color-page:     var(--bc-bg-page);
+  --el-bg-color-overlay:  var(--bc-bg-elevated);
+
+  --el-box-shadow:        var(--bc-shadow);
+  --el-box-shadow-light:  var(--bc-shadow-sm);
+  --el-box-shadow-lighter:var(--bc-shadow-xs);
+  --el-box-shadow-dark:   var(--bc-shadow-lg);
+
+  color-scheme: dark;
+}
+
+/* ---------- 基础重置 ---------- */
+html, body, #app {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  font-family: var(--bc-font-sans);
+  font-size: var(--bc-fs-sm);
+  line-height: var(--bc-lh-normal);
+  color: var(--bc-text-primary);
+  background: var(--bc-bg-page);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  cursor: default;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* 输入框：恢复文字光标 + 允许选中 */
+input[type="text"], input[type="password"], input[type="email"], input[type="number"],
+input[type="search"], input[type="tel"], input[type="url"], input:not([type]),
+textarea, [contenteditable="true"] { cursor: text; user-select: text; -webkit-user-select: text; }
+
+/* 需要复制的内容（备份文件名 / 命令 / 代码等），允许选中 */
+code, pre, .mono, .selectable, .cell-file, .token-box code, .cmd-box pre {
+  cursor: text; user-select: text; -webkit-user-select: text;
+}
+
+/* ---------- P2-5 运维高频复制区（规格 §4.6）----------
+   全局 user-select:none 是为避免 I-beam 光标的取舍，但运维复制
+   IP / 路径 / 版本号 / 报错原文频率极高，这些值在表格和详情里
+   却往往不在原白名单内（多为普通 span / td），故显式放开。
+   ⚠️ 与上面那条基础白名单的取舍：这里只补 .cell-file 以外的值类容器，
+   不重复声明已覆盖的选择器（.cell-file / .bs-path / .kf-name 自身
+   已带 .mono，由上面那条兜住）。 */
+/* Help.vue 参数表的取值列：值可能是路径/端口/开关，直接可复制 */
+.kv-table .v { cursor: text; user-select: text; -webkit-user-select: text; }
+/* Footer 联系方式（邮箱 / IM / 电话） */
+.contact-value { cursor: text; user-select: text; -webkit-user-select: text; }
+/* BackupLogs 报错原文：超 20 字且是排查的唯一线索 */
+.err-msg { cursor: text; user-select: text; -webkit-user-select: text; }
+/* Servers 资源占用数值（CPU/内存/磁盘百分比） */
+.u-val { cursor: text; user-select: text; -webkit-user-select: text; }
+/* Servers Agent 版本：整格可复制，便于直接框选整列再粘贴到工单 */
+.ver-cell { cursor: text; user-select: text; -webkit-user-select: text; }
+
+*, *::before, *::after { box-sizing: border-box; }
+a { color: inherit; text-decoration: none; }
+
+/* 数字统一等宽（防跳动）—— 运维界面的硬需求
+   P0-8：静默刷新时数字宽度抖动会让表格列宽跳动，故覆盖表格单元与常用数值/文本容器 */
+.mono, .stat-value, .summary-val, td.mono, .kv .v,
+.el-table td, .el-table th, .u-val, .strong, .muted {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum' 1;
+}
+
+/* ---------- 通用工具类 ---------- */
+.bc-card {
+  background: var(--bc-bg-card);
+  border: 1px solid var(--bc-border-hair);
+  border-radius: var(--bc-radius-lg);
+  padding: 20px;
+  box-shadow: var(--bc-shadow-sm);
+  transition: box-shadow var(--bc-dur-slow) var(--bc-ease-out),
+              border-color var(--bc-dur) var(--bc-ease),
+              background-color .35s var(--bc-ease),
+              transform var(--bc-dur) var(--bc-ease),
+              color .25s var(--bc-ease);
+}
+/* 可交互卡片才允许悬浮抬升（纯展示卡不加，避免整页抖动） */
+.bc-card.is-interactive:hover,
+.stat-card:hover {
+  box-shadow: var(--bc-shadow);
+  border-color: var(--bc-border-light);
+  transform: translateY(-1px);
+}
+.bc-page-title { font-size: var(--bc-fs-xl); font-weight: 600; color: var(--bc-text-primary); margin: 0; letter-spacing: var(--bc-tracking-tight); }
+.bc-muted { color: var(--bc-text-secondary); font-size: var(--bc-fs-xs); }
+
+/* ---------- Element Plus 细调 ---------- */
+.el-card {
+  border-radius: var(--bc-radius-lg) !important;
+  border: 1px solid var(--bc-border-hair) !important;
+  box-shadow: var(--bc-shadow-sm) !important;
+  background: var(--bc-bg-card) !important;
+}
+
+.el-button {
+  font-weight: 500;
+  border-radius: var(--bc-radius);
+  letter-spacing: var(--bc-tracking-wide);
+  transition: background-color var(--bc-dur) var(--bc-ease),
+              border-color var(--bc-dur) var(--bc-ease),
+              color var(--bc-dur) var(--bc-ease),
+              box-shadow var(--bc-dur) var(--bc-ease),
+              transform var(--bc-dur-fast) var(--bc-ease-spring);
+}
+/* primary hover 变深（覆盖 EP 默认的变浅） */
+.el-button--primary:hover,
+.el-button--primary:focus-visible {
+  background-color: var(--bc-primary-hover);
+  border-color: var(--bc-primary-hover);
+}
+.el-button--primary:active {
+  background-color: var(--bc-primary-active);
+  border-color: var(--bc-primary-active);
+}
+/* ---------- P0-2 焦点可见性（WCAG 2.2 SC 1.4.11）---------- */
+/* outline 用 transparent 占位：既能通过 Windows 高对比模式/forced-colors 的
+   「必须有 outline」检查，又不会在常规模式下画出多余描边；可见性由 box-shadow 承担。 */
+:focus-visible {
+  outline: 2px solid transparent;
+  box-shadow: var(--bc-ring-a11y);
+}
+/* EP 组件自带 focus-visible 特异性更高，需显式升级（须在下方覆盖规则之前） */
+.el-button:focus-visible { outline: 2px solid transparent; box-shadow: var(--bc-ring-a11y); }
+/* 危险操作（删除/停止/清理）用 danger 版焦点环。
+   放在 .el-button:focus-visible 之后，否则同特异性下会被后者覆盖。 */
+.el-button--danger:focus-visible {
+  box-shadow: var(--bc-ring-a11y-danger);
+}
+/* 被 overflow:hidden 裁剪的容器：焦点环改为内缩，保证完整可见。
+   放在最后，确保在容器内优先于上面的外扩环。 */
+.table-card :focus-visible,
+.settings-shell :focus-visible,
+.storage-pool :focus-visible {
+  box-shadow: var(--bc-ring-a11y-inset);
+}
+.table-card .el-button--danger:focus-visible,
+.settings-shell .el-button--danger:focus-visible,
+.storage-pool .el-button--danger:focus-visible {
+  box-shadow: var(--bc-ring-a11y-inset-danger);
+}
+/* 输入类控件聚焦不画框（用户明确要求"鼠标选中后不要这个蓝色的框"）：
+   EP 全局 :focus-visible 是主色 outline + outline-offset:2px，上面的 a11y 环对输入框也过重，
+   两条都去掉——光标本身已指示输入位置；特异性 (0,2,0) 稳压上方同特异性容器规则，须放其后 */
+/* 内层 input 自身无描边（描边在 wrapper 的 box-shadow 上），只杀全局 a11y 3px 环 */
+.el-input__inner:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
+/* textarea 的描边在自身 box-shadow 上：只去 outline，描边交给 EP :focus 规则
+   （变量已改为默认边框色，聚焦即默认 1px 灰描边，不变色不加粗） */
+.el-textarea__inner:focus-visible {
+  outline: none;
+}
+/* select 聚焦环同理：EP 的 .is-focused 是 1px 主色 inset（直连 --el-color-primary，
+   不走上面的输入框变量），显式改回其默认描边色；非过滤型 select 的隐藏 input
+   带 a11y 3px 影但父层 opacity:0 不可见，一并清掉 */
+.el-select__wrapper.is-focused {
+  box-shadow: 0 0 0 1px var(--el-border-color) inset;
+}
+.el-select__input:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
+.el-button.is-disabled, .el-button.is-disabled:hover { cursor: not-allowed; }
+
+/* ---------- 表格 ---------- */
+.el-table {
+  --el-table-border-color:         var(--bc-border-hair);
+  --el-table-text-color:           var(--bc-text-regular);
+  --el-table-header-text-color:    var(--bc-text-secondary);
+  --el-table-header-bg-color:      var(--bc-bg-inset);
+  --el-table-row-hover-bg-color:   var(--bc-bg-hover);
+  --el-table-current-row-bg-color: var(--bc-primary-50);
+  --el-table-bg-color:             var(--bc-bg-card);
+  --el-table-tr-bg-color:          var(--bc-bg-card);
+  --el-table-expanded-cell-bg-color: var(--bc-bg-inset);
+  font-size: var(--bc-fs-sm);
+}
+.el-table th.el-table__cell {
+  font-size: var(--bc-fs-2xs);
+  font-weight: 600;
+  letter-spacing: var(--bc-tracking-caps);
+  color: var(--bc-text-secondary);
+  background: var(--bc-bg-inset);
+  padding: 11px 0;
+}
+/* 单元格垂直居中：此前是 top，会让单行内容（徽标/按钮/数字）顶到行首，
+   与旁边两行的内容（文件名+目录、名称+域名、多条备份）看起来文字高低不一 */
+.el-table td.el-table__cell { padding: 13px 0; color: var(--bc-text-regular); vertical-align: middle; }
+/* P0-3 密度：EP 自带 .cell{padding:0 12px;line-height:23px} 导致行高 49px/表头 45px，
+   视觉密度虚高。改用 1.5 倍行高 + 16px 左右留白（首列 20px），行高约 46px、表头约 39px。 */
+.el-table .cell { padding-left: 16px; padding-right: 16px; line-height: 1.5; }
+/* 胶囊/徽标是 inline-flex：在普通 inline 排版里默认按 baseline 与旁边文字对齐，
+   文字会贴着胶囊的底，视觉上高低不一。统一改为垂直居中（flex/grid 容器内此属性不生效，无副作用）。 */
+.chip, .badge { vertical-align: middle; }
+.el-table tr > td:first-child > .cell,
+.el-table tr > th:first-child > .cell { padding-left: 20px; }
+.el-table tr > td:last-child > .cell,
+.el-table tr > th:last-child > .cell { padding-right: 20px; }
+.el-table .el-table__cell { border-bottom-color: var(--bc-border-hair); }
+/* 固定列分隔换成 hairline */
+.el-table--enable-row-hover .el-table__body tr:hover > td.el-table__cell {
+  background-color: var(--bc-bg-hover);
+}
+.el-table__fixed-right::before, .el-table__fixed-left::before { background-color: var(--bc-border-hair); }
+
+/* ---------- 表单 ---------- */
+.el-input, .el-textarea, .el-select {
+  --el-input-bg-color: var(--bc-bg-card);
+  --el-input-border-color: var(--bc-border);
+  --el-input-hover-border-color: var(--bc-border-strong);
+  /* 聚焦即默认边框：EP 2.8 的 is-focus/:focus 用此变量画 1px inset 描边（替代基础描边），
+     用户要求聚焦时保持默认边框样式——不变色（曾是主色蓝）、不加粗（仍 1px 灰）；
+     注意不能设 transparent：那会连基础描边一起变没（聚焦时边框消失） */
+  --el-input-focus-border-color: var(--el-input-border-color);
+  --el-input-text-color: var(--bc-text-regular);
+  --el-input-placeholder-color: var(--bc-text-placeholder);
+  --el-input-border-radius: var(--bc-radius);
+}
+.el-input.is-disabled { --el-input-bg-color: var(--bc-bg-inset); }
+.el-form-item__label {
+  font-size: var(--bc-fs-sm);
+  font-weight: 500;
+  color: var(--bc-text-regular);
+  padding-right: 12px;
+}
+.el-form-item__error { font-size: var(--bc-fs-xs); color: var(--bc-danger); }
+
+/* ---------- 密钥模式下拉（选项为「label + 说明」两行结构）----------
+   EP 下拉项默认 height:34px + line-height:34px + overflow:hidden + white-space:nowrap，
+   两行内容会被压扁/截断。下拉 popper teleport 到 body，组件 scoped 样式不生效，
+   必须走 popper-class + 全局规则。height:auto 同时覆盖 .is-selected 选中项
+   （EP 选中态只改颜色/字重，不涉及尺寸）。 */
+.key-mode-popper .el-select-dropdown__item {
+  height: auto;
+  padding: 10px 16px;
+  white-space: normal;
+  line-height: 1.5;
+}
+
+/* ---------- Dialog ---------- */
+/* 标题栏为「半透明背景条」：四角圆角、左右通幅；关闭按钮定位在 banner 内右侧居中 */
+/* ⚠️ 调整 header 的 margin/padding 时必须同步改 headerbtn 的 top/right。
+   banner 几何（与 dialog 宽度无关，全系统 8 处 el-dialog 通用）：
+   dialog padding 16 + header margin 20 → banner 上缘 y=36、高 52（14 内边距 + 24 标题行高 + 14 内边距）、
+   右缘在 dialog 右缘内侧 36px 处。34px 按钮垂直居中：top = 36 + (52-34)/2 = 45px；
+   右缘距 banner 右边缘留 10px：right = 36 + 10 = 46px
+   （旧值 right:30px 会使按钮右缘超出 banner 右缘 6px，即「关闭按钮超出标题背景框」）。 */
+.el-dialog {
+  --el-dialog-border-radius: var(--bc-radius-xl);
+  background: var(--bc-bg-elevated);
+  box-shadow: var(--bc-shadow-xl);
+}
+.el-dialog__header {
+  margin: 20px 20px 0 !important;
+  padding: 14px 20px !important;
+  background: rgba(15, 110, 140, .07);
+  border-radius: 12px;
+}
+html.dark .el-dialog__header { background: rgba(51, 180, 208, .12); }
+.el-dialog__title { font-size: var(--bc-fs-lg); font-weight: 600; color: var(--bc-text-primary); }
+.el-dialog__body { padding: 20px 24px !important; }
+.el-dialog__footer { padding: 12px 24px 28px !important; }
+.el-dialog__headerbtn {
+  top: 45px !important; right: 46px !important;
+  width: 34px; height: 34px; border-radius: var(--bc-radius);
+  transition: background-color var(--bc-dur) var(--bc-ease);
+}
+.el-dialog__headerbtn:hover { background: var(--bc-bg-hover); }
+/* ---------- 弹窗垂直定位（全局）----------
+   EP 默认 margin-top:15vh；本站表单弹窗普遍较高（横版表单 700px+），15vh 起排
+   会把底部顶出视口，观感「偏下」，且要滚动遮罩才看得到底部按钮。
+   改为 8vh 起排 + max-height 兜底：内容超高时 __body 内部滚动，头/脚常驻。 */
+.el-dialog {
+  --el-dialog-margin-top: 8vh;
+  max-height: calc(100vh - 8vh - 60px);
+  display: flex;
+  flex-direction: column;
+}
+.el-dialog__body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+/* 对话框内的表单：max-width 520 居中，形成对称的左右留白（横版宽弹窗在组件内用
+   .el-dialog .xx-form.xx-form 提高特异性解除，见 TaskFormDialog/StorageFormDialog） */
+.el-dialog .el-form { max-width: 520px; margin: 0 auto; }
+.el-dialog .el-form-item__label { padding-right: 12px; }
+.el-overlay { backdrop-filter: blur(2px); }
+
+/* ---------- Drawer ---------- */
+.el-drawer {
+  --el-drawer-bg-color: var(--bc-bg-elevated);
+  border-radius: var(--bc-radius-xl) 0 0 var(--bc-radius-xl);
+  box-shadow: var(--bc-shadow-xl);
+}
+
+/* ---------- 深色主按钮：亮青底 + 墨色字（白字对比度仅 2.45:1，不可用）---------- */
+html.dark .el-button--primary {
+  --el-button-text-color: var(--bc-on-accent);
+  color: var(--bc-on-accent);
+}
+html.dark .el-button--primary:hover,
+html.dark .el-button--primary:focus-visible {
+  --el-button-text-color: var(--bc-on-accent);
+  background-color: var(--bc-primary-hover);
+  border-color: var(--bc-primary-hover);
+  color: var(--bc-on-accent);
+}
+
+/* ============================================================
+   P0-4 容器宽度上限 / P0-5 响应式基础
+   断点取值 1280 / 1024 / 768，与既有 .vue 内的 900 / 1080 / 1180 均不重合，
+   避免与 Footer、settings、Restore 的局部断点互相打架。
+   ============================================================ */
+/* 2560px 宽屏上内容铺满一行行长难以阅读：限制正文宽度并居中 */
+.el-main > * {
+  max-width: var(--bc-container);
+  margin-inline: auto;
+}
+/* .main 是 DefaultLayout 的 scoped 样式 `.main[data-v-*]`（特异性 0,2,0），
+   且其 CSS 随路由 chunk 异步加载、晚于本文件，源序在后者。
+   故这里用 .layout .el-main.main（0,3,0）确保断点内能稳定覆盖 padding。 */
+.layout .el-main.main { padding: 24px; }
+@media (max-width: 1280px) { .layout .el-main.main { padding: 20px; } }
+@media (max-width: 1024px) { .layout .el-main.main { padding: 16px; } }
+@media (max-width: 768px)  { .layout .el-main.main { padding: 12px; } }
+
+/* 小屏下弹层不超出视口（EP 默认 50% 宽在窄屏会被挤压/溢出） */
+.el-dialog, .el-drawer { max-width: calc(100vw - 48px); }
+/* ElMessageBox 必须单独收宽度，不能并进上面的小屏兜底：
+   EP 的 .el-message-box 是 width:100% + max-width:420px（theme-chalk message-box.scss），
+   本文件后加载、同特异性、源序胜出——若给它套 calc(100vw - 48px)，420px 上限被冲掉，
+   桌面端直接满宽（"批量升级 Agent"弹窗占满屏幕即此因，全部 15 处 ElMessageBox 均中招）。
+   显式收回 460px（与最窄档 el-dialog「编辑备注」对齐，形成 460/560/580-620 三档体系），
+   小屏仍靠 max-width 兜底不溢出。 */
+.el-message-box { width: 460px; max-width: calc(100vw - 48px); }
+
+/* ---------- 表格列分级隐藏（P0-6）----------
+   背景：Servers 8 列合计 1346px、Tasks/Storages 表更宽，1440 视口就已横向滚动。
+
+   ⚠️ 为什么必须同时隐藏 <col>：EP 的 tableLayout 默认 "fixed"（table/defaults.mjs:188），
+   列宽由 h-helper.mjs 的 hColgroup 生成的每列 <col> 决定。只把 th/td 设 display:none，
+   <col> 仍在、table 宽度一分不减 → 表现为「文字没了但滚动条还在」，比现状更糟。
+   故每个断点需三步：<col> 隐藏 + 单元格隐藏 + 让表格宽度重算。
+
+   列序以各视图 <style> 首行注释为准（已核对当前代码）。状态列/操作列任何断点都不隐藏。 */
+
+/* 隐藏某表第 n 列（1-based）：<col> 与 th/td 同步隐藏，并解除固定宽度约束 */
+
+/* ≤1360px：隐藏次要信息列 */
+@media (max-width: 1360px) {
+  /* Servers 3 IP/系统、6 最后心跳 */
+  .servers-table col:nth-child(3), .servers-table col:nth-child(6),
+  .tasks-table col:nth-child(4) { display: none; }
+  .servers-table th:nth-child(3), .servers-table td:nth-child(3),
+  .servers-table th:nth-child(6), .servers-table td:nth-child(6),
+  .tasks-table th:nth-child(4), .tasks-table td:nth-child(4) { display: none; }
+  /* Storages 5 关联任务 */
+  .storages-table col:nth-child(5) { display: none; }
+  .storages-table th:nth-child(5), .storages-table td:nth-child(5) { display: none; }
+}
+
+/* ≤1100px：再隐藏一批（状态列/操作列保留） */
+@media (max-width: 1100px) {
+  /* Servers 5 Agent版本 */
+  .servers-table col:nth-child(5) { display: none; }
+  .servers-table th:nth-child(5), .servers-table td:nth-child(5) { display: none; }
+  /* Tasks 3 备份计划 */
+  .tasks-table col:nth-child(3) { display: none; }
+  .tasks-table th:nth-child(3), .tasks-table td:nth-child(3) { display: none; }
+  /* Storages 2 类型、3 强制备份 */
+  .storages-table col:nth-child(2), .storages-table col:nth-child(3) { display: none; }
+  .storages-table th:nth-child(2), .storages-table td:nth-child(2),
+  .storages-table th:nth-child(3), .storages-table td:nth-child(3) { display: none; }
+  /* BackupLogs 6 用时、9 云上传 */
+  .backup-logs-table col:nth-child(6), .backup-logs-table col:nth-child(9) { display: none; }
+  .backup-logs-table th:nth-child(6), .backup-logs-table td:nth-child(6),
+  .backup-logs-table th:nth-child(9), .backup-logs-table td:nth-child(9) { display: none; }
+  /* ResourceLibrary 2 备注 */
+  .resource-table col:nth-child(2) { display: none; }
+  .resource-table th:nth-child(2), .resource-table td:nth-child(2) { display: none; }
+}
+
+/* 隐藏列后让表格宽度重算：fixed 布局下必须显式交回 auto，否则 colgroup 宽度仍生效 */
+@media (max-width: 1360px) {
+  .servers-table .el-table__header-wrapper table,
+  .servers-table .el-table__body-wrapper table,
+  .tasks-table .el-table__header-wrapper table,
+  .tasks-table .el-table__body-wrapper table,
+  .storages-table .el-table__header-wrapper table,
+  .storages-table .el-table__body-wrapper table,
+  .backup-logs-table .el-table__header-wrapper table,
+  .backup-logs-table .el-table__body-wrapper table,
+  .resource-table .el-table__header-wrapper table,
+  .resource-table .el-table__body-wrapper table { width: auto !important; }
+}
+
+/* ---------- 滚动条 ---------- */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #c9d1d9; border-radius: 999px; }
+::-webkit-scrollbar-thumb:hover { background: #a8b2bc; }
+html.dark ::-webkit-scrollbar-thumb { background: #333d49; }
+html.dark ::-webkit-scrollbar-thumb:hover { background: #47535f; }
+
+/* ---------- 图表（SVG presentation attribute 可被 CSS 覆盖，无需改组件）---------- */
+.chart-svg polyline { stroke: var(--bc-chart-1); }
+.chart-svg polygon  { fill: url(#area-grad); }
+.chart-svg circle   { fill: var(--bc-bg-card); stroke: var(--bc-chart-1); stroke-width: 1.4; }
+#area-grad stop:first-child { stop-color: var(--bc-chart-1); stop-opacity: .28; }
+#area-grad stop:last-child  { stop-color: var(--bc-chart-1); stop-opacity: .02; }
+
+/* ---------- 登录页（深色补丁：特异性 0,2,1 可覆盖 scoped 的 0,2,0）---------- */
+html.dark .login-page {
+  background:
+    radial-gradient(1100px 520px at 18% 8%, rgba(51, 180, 208, .10) 0%, transparent 62%),
+    radial-gradient(900px 460px at 88% 92%, rgba(128, 152, 240, .10) 0%, transparent 60%),
+    var(--bc-bg-page);
+}
+html.dark .login-card {
+  background: var(--bc-bg-elevated);
+  border-color: var(--bc-border-light);
+}
+
+/* ============================================================
+   P1 · 表格操作列点击区 / 状态反馈 / 徽标 / 帮助中心
+   ============================================================ */
+
+/* ---------- P1-1 操作列 link 按钮点击区（WCAG 2.2 SC 2.5.8 ≥24×24）----------
+   EP 的 .el-button.is-link 是 height:auto + padding:2px，实测约 23px 高，低于 24px。
+   min-height 28px 达 AA（桌面鼠标操作为主，不追 44px，见规格 §4.2）。
+
+   ⚠️ 横向 padding 8px 会让每个按钮宽 +12px，需核对各表操作列是否撑破。
+   实测（fixed="right" 列在 EP 里独立成表，单元格同时是首/末列，
+   故左右 padding 各 20px = 40px，可用宽 = 列宽 - 40）：
+      Servers  360 - 40 = 320 可用；4 按钮 ×63px + 3×4px gap  = 264 → 余 56px ✅
+      Tasks   260 - 40 = 220 可用；3 按钮 ×63px + 2×6px gap  = 201 → 余 19px ✅
+     Storages 290 - 40 = 250 可用；4 按钮 ×63px + 3×12px 边距 = 288 → 超 38px ❌
+   单按钮宽 63px = 8+8 padding + 13 icon + 6 icon-text 间距 + 26 双汉字 + 2 border。
+
+   Storages 的操作列没有 .row-actions 包裹（按钮是 .cell 的直接子元素），
+   仍吃 EP 默认的 `.el-button + .el-button { margin-left: 12px }`，
+   而 Servers/Tasks 的 .row-actions 已把它归零、只用 flex gap。
+   故这里统一归零相邻 link 按钮的 margin，让 8px padding 自己提供 16px 视觉间距，
+   并把 Storages 操作列的单元格横向 padding 收到 12px → 可用 266px，需 252px，余 14px ✅ */
+.el-table td .el-button.is-link { min-height: 28px; padding: 4px 8px; }
+.el-table td .el-button + .el-button { margin-left: 0; }
+.storages-table td.el-table__cell:last-child > .cell,
+.storages-table th.el-table__cell:last-child > .cell { padding-left: 12px; padding-right: 12px; }
+
+/* 90px 窄操作列（BackupLogs「删除」/ ResourceLibrary「删除」）：
+   上面的 8px padding 会让内容需 109px > 可用 66px，导致按钮被 .cell 的 overflow 裁掉。
+   这里只收窄横向 padding（保住 28px 点击高度不变），并压低字号让「删除」两字放得下。
+   实测：可用 90-8*2=74px ≥ 内容 62px。 */
+.backup-logs-table td.el-table__cell:last-child > .cell,
+.backup-logs-table th.el-table__cell:last-child > .cell,
+.resource-table td.el-table__cell:last-child > .cell,
+.resource-table th.el-table__cell:last-child > .cell { padding-left: 4px; padding-right: 4px; }
+.backup-logs-table td.el-table__cell:last-child .el-button,
+.resource-table td.el-table__cell:last-child .el-button { padding: 4px 6px; font-size: 12px; }
+
+/* ---------- P1-10 §5.1 加载态：遮罩精修 ----------
+   不用骨架屏：行高由 padding 决定，首屏行数未知，骨架屏会因行数变化产生跳动。
+   遮罩半透明到 .62，切 Dashboard 时间范围时数据仍可读（规格 §5.1.2）。
+   遮罩底色走 token，深色下不再是一层发白的雾。 */
+.el-loading-mask {
+  background-color: var(--bc-loading-mask);
+  backdrop-filter: blur(1px);
+  border-radius: inherit;         /* 跟随卡片圆角 */
+}
+.el-loading-spinner .circular { width: 26px; height: 26px; }   /* EP 默认 42px 偏大 */
+.el-loading-spinner .path { stroke: var(--bc-primary); stroke-width: 3; }
+.el-loading-text { color: var(--bc-text-secondary); font-size: var(--bc-fs-xs); }
+
+/* ---------- P1-10 §5.2 空状态统一 ----------
+   仅做视觉统一。文案统一（「暂无 X · 下一步动作」）需改各 .vue 的 empty-text
+   属性，属P1-11，不在本文件范围。 */
+.el-table .el-table__empty-block { min-height: 200px; padding: 56px 20px; }
+.el-table .el-table__empty-text {
+  color: var(--bc-text-secondary);
+  font-size: var(--bc-fs-sm);
+  line-height: 1.7;
+}
+/* 零 DOM 的极淡方框图标，让空状态有视觉锚点而不抢注意力 */
+.el-table .el-table__empty-text::before {
+  content: '';
+  display: block;
+  width: 40px; height: 32px;
+  margin: 0 auto 12px;
+  border: 1.5px dashed var(--bc-border-strong);
+  border-radius: var(--bc-radius-sm);
+  opacity: .7;
+}
+.empty {
+  padding: 56px 20px;
+  text-align: center;
+  color: var(--bc-text-secondary);
+  font-size: var(--bc-fs-sm);
+  line-height: 1.7;
+}
+
+/* ---------- P1-10 §5.3 ElMessage 视觉对齐 ----------
+   报错文案常超过 20 字且需要复制排查，全局 user-select:none 会让用户选不中，
+   故显式放开 .el-message__content 的可选区（规格 §5.3 + §4.6）。 */
+.el-message {
+  border-radius: var(--bc-radius);
+  border: 1px solid var(--bc-border-hair);
+  background: var(--bc-bg-elevated);
+  box-shadow: var(--bc-shadow-lg);
+  font-size: var(--bc-fs-sm);
+  padding: 10px 16px;
+}
+.el-message__icon { font-size: var(--bc-fs-base); }
+.el-message__content { cursor: text; user-select: text; -webkit-user-select: text; }
+/* EP 的 .el-message--success 等自带 --el-message-text-color，同选择器覆盖即可 */
+.el-message--success { --el-message-text-color: var(--bc-success); }
+.el-message--warning { --el-message-text-color: var(--bc-warning); }
+.el-message--error   { --el-message-text-color: var(--bc-danger); }
+.el-message--info    { --el-message-text-color: var(--bc-info); }
+
+/* ---------- P1-12 徽标状态点 + 「执行中」呼吸 ----------
+   让扫读时颜色成为第二线索而非第一线索（规格 §4.3）。
+   ⚠️ 为什么用绝对定位而不是规格里的 flex 首项（width:5px; margin-right:6px）：
+   flex 方案会实打实多占 11px 宽，而全站状态列只有 90px
+   （可用 90-32=58px），双汉字徽标已占 48px、三汉字（待连接/执行中/已上传）
+   已占 59px —— flex 方案下三汉字徽标会被 .cell 的 overflow:hidden 裁掉约 12px。
+   改绝对定位后点落在徽标自带的 12px 左内边距里，宽度增量为 0，任何列都不裁切。
+   ⚠️ .badge 是各 .vue 的 scoped 类，scoped 未声明 ::before，故全局规则可生效。 */
+.badge { position: relative; }
+.badge::before {
+  content: '';
+  position: absolute;
+  left: 4px; top: 50%;
+  width: 5px; height: 5px;
+  margin-top: -2.5px;
+  border-radius: 50%;
+  background: currentColor;      /* 跟随徽标文字色，语义色自动对齐 */
+  opacity: .85;
+}
+@keyframes bc-pulse {
+  0%, 100% { opacity: .35; }
+  50%      { opacity: 1; }
+}
+/* 「执行中」是瞬时状态，需要动画冗余；用呼吸而非闪烁，避免干扰 */
+.badge.run::before { animation: bc-pulse 1.6s var(--bc-ease) infinite; }
+/* 呼吸动效在 prefers-reduced-motion 下的兜底已合并到文件末尾的全局块，不另起同名块 */
+
+/* ---------- P1-8 帮助中心可扫读性（规格 §1.2-D）----------
+   Help.vue 是 745 行长文档：正文行宽在 2560px 下一行能放约 190 个汉字，
+   tab 头部不吸顶则切换 tab 后要滚回顶部，el-collapse 项之间无呼吸。
+   ⚠️ 本组选择器与 Help.vue 的 scoped 类同权重，靠源序取胜（style.css 在 main.js
+   于路由 chunk 之前加载）；此处只设置 scoped 未声明的属性，不会互相覆盖。 */
+.help-page { max-width: var(--bc-container-doc); margin-inline: auto; }
+.help-page .intro,
+.help-page .steps,
+.help-page .tip { max-width: 60em; }          /* ≈780px @13px，约 60 个汉字/行 */
+.help-page .tab-intro { background: var(--bc-bg-inset); }
+.help-page .doc-table code {
+  background: var(--bc-bg-inset);
+  border: 1px solid var(--bc-border-hair);
+}
+/* tab 头部吸顶：.el-main 是滚动容器，顶栏在其外，故 top:0 无需偏移 */
+.help-tabs .el-tabs__header {
+  position: sticky; top: 0; z-index: 5;
+  background: var(--bc-bg-card);
+}
+/* 折叠面板节奏：EP 默认边框较重，改为 hairline 分隔 + hover 反馈 */
+.help-page .el-collapse-item__header {
+  padding: 12px 16px;
+  border-radius: var(--bc-radius);
+  transition: background-color var(--bc-dur) var(--bc-ease);
+}
+.help-page .el-collapse-item__header:hover { background: var(--bc-bg-hover); }
+.help-page .el-collapse-item__content { padding-bottom: 20px; }
+.help-page .el-collapse { border-top: none; border-bottom: none; }
+.help-page .el-collapse-item { border-bottom: 1px solid var(--bc-border-hair); }
+.help-page .el-collapse-item:last-child { border-bottom: none; }
+
+/* ============================================================
+   动效层 · 现代灵动（纯视觉，不影响任何功能）
+   设计原则：短促、有缓出、可被 prefers-reduced-motion 一键关闭
+   ============================================================ */
+@keyframes bc-page-in {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: none; }
+}
+@keyframes bc-rise {
+  from { opacity: 0; transform: translateY(14px); }
+  to   { opacity: 1; transform: none; }
+}
+@keyframes bc-fade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes bc-bar-grow {
+  from { transform: scaleY(0); opacity: .5; }
+  to   { transform: scaleY(1); opacity: 1; }
+}
+@keyframes bc-draw { to { stroke-dashoffset: 0; } }
+@keyframes bc-indicator {
+  from { transform: scaleY(0); }
+  to   { transform: scaleY(1); }
+}
+@keyframes bc-float {
+  0%, 100% { transform: translateY(0); }
+  50%      { transform: translateY(-6px); }
+}
+
+/* ---------- 路由切换：淡入 + 上浮 ---------- */
+.bc-page-enter-active { animation: bc-page-in .3s var(--bc-ease-out); }
+.bc-page-leave-active { animation: bc-page-in .2s var(--bc-ease) reverse; }
+
+/* ---------- 仪表盘内容块依次浮现（backwards：不锁定 hover 的位移）---------- */
+.stat-card { animation: bc-rise .5s var(--bc-ease-out) backwards; }
+.stat-grid .stat-card:nth-child(1) { animation-delay: .04s; }
+.stat-grid .stat-card:nth-child(2) { animation-delay: .10s; }
+.stat-grid .stat-card:nth-child(3) { animation-delay: .16s; }
+.stat-grid .stat-card:nth-child(4) { animation-delay: .22s; }
+.storage-pool { animation: bc-rise .55s .10s var(--bc-ease-out) backwards; }
+.pool-grid .pool-card { animation: bc-rise .45s var(--bc-ease-out) backwards; }
+.pool-grid .pool-card:nth-child(1) { animation-delay: .16s; }
+.pool-grid .pool-card:nth-child(2) { animation-delay: .22s; }
+.pool-grid .pool-card:nth-child(3) { animation-delay: .28s; }
+.pool-grid .pool-card:nth-child(4) { animation-delay: .34s; }
+.pool-grid .pool-card:nth-child(n+5) { animation-delay: .40s; }
+.chart-card { animation: bc-rise .55s .26s var(--bc-ease-out) backwards; }
+.table-card { animation: bc-rise .55s .34s var(--bc-ease-out) backwards; }
+
+/* ---------- 按钮按压缩放（tactile feedback）---------- */
+.el-button:not(.is-disabled):active { transform: scale(.96); }
+
+/* ---------- 主题切换：大表面柔和过渡 ---------- */
+body, .layout-wrap, .el-header, .el-aside, .el-main, .el-dialog, .el-drawer {
+  transition: background-color .35s var(--bc-ease),
+              border-color .35s var(--bc-ease),
+              color .25s var(--bc-ease);
+}
+
+/* ---------- 降低动效偏好（全局唯一块，P2-7 在此增补）---------- */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .01ms !important;
+  }
+  /* 1) 关闭平滑滚动：锚点跳转/滚动定位改为瞬时到位 */
+  html { scroll-behavior: auto !important; }
+  /* 2) 关闭卡片入场位移：bc-rise 是 translateY(14px) 上浮，
+        即使时长被压到 .01ms，个别浏览器仍会闪一帧位移，故直接移除 transform。
+        注：transform: none 会一并压掉 .stat-card:hover 的 translateY(-1px) 微反馈，
+        这正是 reduced-motion 用户想要的（无任何位移动画），非副作用。 */
+  .stat-card, .storage-pool, .pool-grid .pool-card,
+  .chart-card, .table-card, .restore-group {
+    animation: none !important;
+    transform: none !important;
+  }
+  /* 3) 关闭旋转/持续动画：徽标呼吸退化为静止的点，
+        Servers.vue 的 Agent 升级 spinner 停止旋转并给出静态对位。 */
+  .badge.run::before { animation: none !important; opacity: .85; }
+  .upg-spin { animation: none !important; }
+}
